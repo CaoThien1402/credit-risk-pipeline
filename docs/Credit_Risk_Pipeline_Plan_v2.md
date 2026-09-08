@@ -10,7 +10,7 @@
 
 ## Schema cơ sở dữ liệu (PostgreSQL) — đã sửa
 
-Tách file phẳng 29 cột thành **5 bảng** chuẩn hoá (thêm `cities`, bớt `locations`):
+Tách file phẳng 29 cột thành **4 bảng** chuẩn hoá (thêm `cities`, bớt `locations`):
 
 ```
 cities
@@ -53,23 +53,23 @@ loans
 ## Buổi 2 — DDL tạo bảng 🔧
 
 **Prompt AI**:
-> "Viết DDL PostgreSQL tạo 5 bảng: cities, customers, credit_bureau, loans theo schema sau [dán schema ở trên]. customers.client_id là PK dạng VARCHAR, city_id là FK về cities. loans.loan_id tự sinh SERIAL nhưng thêm cột application_ref VARCHAR UNIQUE dùng làm khoá cho UPSERT (vì loan_id SERIAL không dùng được cho ON CONFLICT khi dữ liệu được sinh mới mỗi lần chạy). loans.loan_status cho phép NULL. Thêm CHECK constraint: customers.age BETWEEN 18 AND 100, customers.emp_length <= age - 14, loans.loan_status IN (0,1), loans.data_source IN ('historical','synthetic_daily')."
+> "Viết DDL PostgreSQL tạo 4 bảng: cities, customers, credit_bureau, loans theo schema sau [dán schema ở trên]. customers.client_id là PK dạng VARCHAR, city_id là FK về cities. loans.loan_id tự sinh SERIAL nhưng thêm cột application_ref VARCHAR UNIQUE dùng làm khoá cho UPSERT (vì loan_id SERIAL không dùng được cho ON CONFLICT khi dữ liệu được sinh mới mỗi lần chạy). loans.loan_status cho phép NULL. Thêm CHECK constraint: customers.age BETWEEN 18 AND 100, customers.emp_length <= age - 14, loans.loan_status IN (0,1), loans.data_source IN ('historical','synthetic_daily')."
 
-- Chạy DDL, kiểm tra 5 bảng đã tạo đúng bằng pgAdmin/DBeaver, thử insert 1 dòng age=150 để xác nhận CHECK constraint chặn được.
+- Chạy DDL, kiểm tra 4 bảng đã tạo đúng bằng pgAdmin/DBeaver, thử insert 1 dòng age=150 để xác nhận CHECK constraint chặn được.
 
-**Kết quả buổi**: 5 bảng rỗng, có khóa chính/khóa ngoại và CHECK constraint đúng.
+**Kết quả buổi**: 4 bảng rỗng, có khóa chính/khóa ngoại và CHECK constraint đúng.
 
 ---
 
 ## Buổi 3-4 — ETL nạp dữ liệu thật (historical bulk load) 🔧
 
 **Prompt AI**:
-> "Viết script Python dùng pandas + SQLAlchemy đọc file Credit_Risk_Dataset.xlsx, tách cột theo schema 5 bảng [dán schema]. Trước khi insert: (1) set NaN cho person_age > 100 và cho person_emp_length > (person_age - 14) — đây là lỗi dữ liệu thật cần chặn trước khi impute; (2) median imputation cho person_emp_length và loan_int_rate SAU bước chặn outlier; (3) bỏ cột loan_to_income_ratio (trùng loan_percent_income); (4) sinh loan_date rải đều ngẫu nhiên trong 24 tháng gần nhất và application_ref = uuid4 cho mỗi dòng, gắn data_source='historical'. Ghi vào PostgreSQL theo transaction, insert cities trước để lấy city_id."
+> "Viết script Python dùng pandas + SQLAlchemy đọc file Credit_Risk_Dataset.xlsx, tách cột theo schema 4 bảng [dán schema]. Trước khi insert: (1) set NaN cho person_age > 100 và cho person_emp_length > (person_age - 14) — đây là lỗi dữ liệu thật cần chặn trước khi impute; (2) median imputation cho person_emp_length và loan_int_rate SAU bước chặn outlier; (3) bỏ cột loan_to_income_ratio (trùng loan_percent_income); (4) sinh loan_date rải đều ngẫu nhiên trong 24 tháng gần nhất và application_ref = uuid4 cho mỗi dòng, gắn data_source='historical'. Ghi vào PostgreSQL theo transaction, insert cities trước để lấy city_id."
 
 - Buổi 3: viết script, insert thử với 1000 dòng đầu, kiểm tra dữ liệu vào đúng bảng, xác nhận không còn `person_age > 100`.
 - Buổi 4: chạy full 32,581 dòng, viết query kiểm tra đếm số dòng mỗi bảng khớp nhau, xác nhận `loan_date` rải đều qua 24 tháng và `data_source='historical'` toàn bộ.
 
-**Kết quả buổi**: toàn bộ 32,581 hồ sơ nằm trong Postgres, phân bổ đúng 5 bảng, không còn outlier tuổi/thâm niên vô lý.
+**Kết quả buổi**: toàn bộ 32,581 hồ sơ nằm trong Postgres, phân bổ đúng 4 bảng, không còn outlier tuổi/thâm niên vô lý.
 
 ---
 
@@ -88,7 +88,7 @@ loans
 ## Buổi 6-7 — SQL nâng cao: Feature Engineering 🔧
 
 **Prompt AI**:
-> "Viết 1 câu SQL PostgreSQL dùng CTE nối 5 bảng cities, customers, credit_bureau, loans; **bắt buộc thêm WHERE data_source = 'historical'** trong CTE gốc để loại hồ sơ synthetic_daily chưa có outcome thật; thêm cột window function tính loan_amnt trung bình theo nhóm tuổi (age bucket 10 năm) và tỷ lệ default trung bình theo loan_grade."
+> "Viết 1 câu SQL PostgreSQL dùng CTE nối 4 bảng cities, customers, credit_bureau, loans; **bắt buộc thêm WHERE data_source = 'historical'** trong CTE gốc để loại hồ sơ synthetic_daily chưa có outcome thật; thêm cột window function tính loan_amnt trung bình theo nhóm tuổi (age bucket 10 năm) và tỷ lệ default trung bình theo loan_grade."
 
 - Buổi 6: viết CTE nối bảng, xác nhận số dòng ra đúng bằng số hồ sơ historical (không lẫn synthetic).
 - Buổi 7: thêm window functions (avg theo age bucket, tỷ lệ default theo grade, rank theo credit_utilization_ratio trong từng quốc gia), test kết quả bằng tay trên vài dòng mẫu.
