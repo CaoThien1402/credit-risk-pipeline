@@ -1,6 +1,7 @@
-"""Nice-to-have: test cho từng hàm ETL trước khi coi buổi đó là 'xong'."""
+"""Unit tests for the ETL helper functions."""
+import os
 import sys
-sys.path.insert(0, "../etl")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "etl"))
 import pandas as pd
 from historical_load import clean_outliers, drop_redundant_columns
 

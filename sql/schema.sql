@@ -1,5 +1,5 @@
--- Credit Risk Pipeline — Schema đã hiệu chỉnh (v2)
--- So với schema gốc trong kế hoạch, các thay đổi được chú thích ngay dưới từng bảng.
+-- Credit Risk Pipeline schema.
+-- Design notes for each table are commented directly below it.
 
 CREATE TABLE cities (
     city_id     SERIAL PRIMARY KEY,
@@ -10,9 +10,9 @@ CREATE TABLE cities (
     longitude   NUMERIC(9,6) NOT NULL,
     UNIQUE (country, state, city)
 );
--- SỬA: dữ liệu thật chỉ có đúng 18 tổ hợp (country, state, city), mỗi city có lat/long cố định 1:1.
--- Tách bảng riêng thay vì lặp lại toạ độ ở mỗi khách hàng (bảng "locations" trong plan gốc) —
--- giảm 32,581 dòng dư thừa xuống 18 dòng, đúng chuẩn 3NF, join scatter_geo (buổi 16) cũng gọn hơn.
+-- Only 18 distinct (country, state, city) combos exist in the data, each with a fixed
+-- lat/long — a separate dimension table avoids repeating coordinates per customer
+-- (32,581 rows collapse to 18) and keeps the schema in 3NF.
 
 CREATE TABLE customers (
     client_id       VARCHAR(20) PRIMARY KEY,
@@ -27,12 +27,9 @@ CREATE TABLE customers (
     city_id         INT REFERENCES cities(city_id),
     created_at      TIMESTAMP NOT NULL DEFAULT now()
 );
--- SỬA: CHECK age BETWEEN 18 AND 100 — dữ liệu thật có 5 dòng age = 144/123 (lỗi nhập liệu kinh điển
--- của bộ dataset này). Chặn ngay ở DB thay vì đợi đến EDA (buổi 8) mới tình cờ phát hiện.
--- SỬA: CHECK emp_length <= age - 14 — dữ liệu thật có 2 dòng emp_length = 123 năm trong khi
--- age chỉ 21-22 (vô lý về mặt logic, không chỉ là "hiếm").
--- SỬA: city_id thay cho bảng "locations" tách riêng — quan hệ khách hàng-thành phố là 1:1
--- tại một thời điểm, không cần bảng con (chỉ tách riêng nếu sau này track lịch sử đổi địa chỉ).
+-- age BETWEEN 18 AND 100: real data has 5 rows with age 144/123, a known data-entry error.
+-- emp_length <= age - 14: real data has 2 rows with emp_length 123 at age 21-22 (impossible).
+-- city_id is a plain FK, not a join table — customer-to-city is 1:1 at any point in time.
 
 CREATE TABLE credit_bureau (
     client_id                 VARCHAR(20) PRIMARY KEY REFERENCES customers(client_id),
@@ -52,7 +49,7 @@ CREATE TABLE loans (
     loan_amnt           NUMERIC(14,2) NOT NULL CHECK (loan_amnt > 0),
     loan_int_rate       NUMERIC(5,2),
     loan_term_months    SMALLINT CHECK (loan_term_months IN (12,24,36,60)),
-    loan_status         SMALLINT CHECK (loan_status IN (0,1)),  -- NULL = hồ sơ synthetic đang chờ model dự đoán
+    loan_status         SMALLINT CHECK (loan_status IN (0,1)),  -- NULL = synthetic application awaiting a model prediction
     loan_percent_income NUMERIC(6,4),
     other_debt          NUMERIC(14,2),
     debt_to_income_ratio NUMERIC(6,4),
@@ -66,31 +63,19 @@ CREATE INDEX idx_loans_client ON loans(client_id);
 CREATE INDEX idx_loans_date   ON loans(loan_date);
 CREATE INDEX idx_loans_source ON loans(data_source);
 
--- SỬA (những thay đổi quan trọng nhất so với plan gốc):
---
--- 1) application_ref (UNIQUE, tự sinh ở tầng ETL — vd uuid4 hoặc hash(client_id + loan_date))
---    dùng làm khoá cho "ON CONFLICT ... DO UPDATE" ở buổi 5. loan_id SERIAL KHÔNG dùng được
---    cho UPSERT vì mỗi lần script sinh dữ liệu mới, Postgres luôn cấp id mới -> không bao giờ
---    conflict thật, script "test idempotent" trong plan gốc sẽ luôn pass giả tạo.
---
--- 2) Bỏ cột loan_to_income_ratio khỏi bảng loans (chỉ giữ loan_percent_income) — 2 cột này
---    corr = 0.9989 trên dữ liệu thật, tức cùng một tín hiệu tính 2 lần. Giữ cả hai gây
---    multicollinearity thừa và làm SHAP chia đôi importance của cùng một biến.
---
--- 3) Thêm loan_date + data_source — dữ liệu gốc KHÔNG có bất kỳ cột ngày/giờ nào. Nếu không
---    backfill, biểu đồ "tổng dư nợ theo tháng" (buổi 15) chỉ có dữ liệu của vài ngày synthetic,
---    không đủ để vẽ xu hướng theo tháng có ý nghĩa.
---    -> Script ETL lịch sử (buổi 3-4) cần rải loan_date giả lập đều trong ~24 tháng gần nhất.
---
--- 4) data_source dùng để lọc "WHERE data_source = 'historical'" khi train model (buổi 9-11) —
---    tránh học nhầm loan_status giả lập (sampled từ phân phối, không phải outcome thật) của các
---    hồ sơ synthetic được chèn liên tục từ buổi 5 trở đi.
---
--- 5) loan_status cho phép NULL: hồ sơ synthetic mới sinh mô phỏng đúng thực tế — một đơn vay
---    mới nộp CHƯA có kết quả default/không default, đó chính là cái model phải dự đoán.
+-- Key design decisions:
+-- 1) application_ref (UNIQUE, generated in ETL) is the UPSERT key, not loan_id (SERIAL) —
+--    a SERIAL always gets a fresh value, so ON CONFLICT on it would never fire.
+-- 2) loan_to_income_ratio is dropped (corr = 0.9989 with loan_percent_income) — the same
+--    signal computed twice just inflates multicollinearity and splits SHAP importance.
+-- 3) loan_date + data_source are synthetic additions — the source data has no date column
+--    at all; loan_date is backfilled so monthly trend charts have history to show.
+-- 4) data_source lets queries filter to WHERE data_source = 'historical' when training,
+--    excluding synthetic rows whose status is sampled, not a real outcome.
+-- 5) loan_status allows NULL — a freshly submitted application has no outcome yet;
+--    predicting it is the model's job.
 
--- GHI CHÚ VỀ FEATURE LEAKAGE (áp dụng ở buổi 9-11 khi build model, không thuộc phạm vi DDL):
--- loan_grade và loan_int_rate tương quan gần tất định với target (xem phân tích trong hội thoại).
--- Model "duyệt/từ chối hồ sơ mới" (buổi 13) KHÔNG được dùng 2 cột này làm input — chỉ dùng thông
--- tin thô (customers + credit_bureau). Chỉ model "portfolio risk" (phân tích danh mục đã có) mới
--- được dùng đủ cột, và phải ghi rõ sự khác biệt này trong README để tránh overclaim.
+-- Feature leakage note (applies to model training, not this DDL):
+-- loan_grade and loan_int_rate are near-deterministic with respect to the target. The
+-- at-application model must not use them as input; only the portfolio-risk model may,
+-- and that distinction must be documented in the README.

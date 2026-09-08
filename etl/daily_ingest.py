@@ -1,13 +1,4 @@
-"""Buổi 5: mô phỏng 50-100 hồ sơ vay mới mỗi ngày, chạy qua Cron/Task Scheduler lúc 20:00.
-
-SỬA so với plan gốc: UPSERT theo application_ref (khoá tự nhiên do script này sinh ra),
-KHÔNG theo loan_id (SERIAL) — vì mỗi lần chạy sinh dữ liệu mới nên loan_id luôn khác nhau,
-không thể conflict thật. application_ref = hash(client_id + ngày sinh hồ sơ) đảm bảo chạy
-lại 2 lần trong cùng ngày cho cùng 1 client sẽ UPDATE thay vì tạo dòng trùng.
-
-loan_status để NULL: hồ sơ mới nộp CHƯA có outcome — đây là input cho model dự đoán ở
-app/app.py, KHÔNG phải nhãn train.
-"""
+"""Simulate 50-100 new loan applications per day and upsert them into Postgres."""
 import sys
 import hashlib
 from datetime import date
@@ -18,7 +9,7 @@ from sqlalchemy import text
 
 from config import get_engine
 
-# Cột số: lấy mẫu Gaussian quanh mean/std lịch sử, clip về ngưỡng hợp lệ theo CHECK constraint.
+# Numeric columns: Gaussian-sampled around the historical mean/std, clipped to valid ranges.
 NUMERIC_COLS = ["loan_amnt", "loan_int_rate", "loan_percent_income", "other_debt", "debt_to_income_ratio"]
 NUMERIC_MIN = {
     "loan_amnt": 1.0,               # CHECK loan_amnt > 0
@@ -35,17 +26,14 @@ NUMERIC_DECIMALS = {
     "debt_to_income_ratio": 4,      # NUMERIC(6,4)
 }
 
-# Cột rời rạc: lấy mẫu theo đúng tần suất lịch sử, đảm bảo luôn ra giá trị hợp lệ theo
-# CHECK constraint (loan_grade IN A-G, loan_term_months IN (12,24,36,60)).
+# Categorical columns: sampled by historical frequency, always valid per the CHECK
+# constraints (loan_grade A-G, loan_term_months 12/24/36/60).
 CATEGORICAL_COLS = ["loan_intent", "loan_grade", "loan_term_months"]
 
 
 def load_reference_stats() -> pd.DataFrame:
-    """Đọc nền thống kê để sinh hồ sơ synthetic: CHỈ loans WHERE data_source='historical'
-    (không lấy nhiễu từ chính dữ liệu synthetic_daily của các ngày trước, tránh phân phối
-    trôi dần). client_id lấy trực tiếp từ loans.client_id — đã đảm bảo tồn tại trong
-    customers qua FK, dùng để chọn "khách hàng nộp hồ sơ mới" cho ngày hôm nay.
-    """
+    """Read historical loans as the statistical baseline for sampling synthetic applications."""
+    # Filtered to data_source='historical' only, so synthetic noise never compounds across days.
     engine = get_engine()
     query = """
         SELECT client_id, loan_intent, loan_grade, loan_amnt, loan_int_rate,
@@ -57,10 +45,7 @@ def load_reference_stats() -> pd.DataFrame:
 
 
 def sample_new_applications(n: int, reference_stats: pd.DataFrame, seed: int | None = None) -> pd.DataFrame:
-    """Sinh n hồ sơ bằng cách lấy mẫu có nhiễu từ phân phối thống kê (mean/std cho cột số,
-    tần suất cho cột rời rạc) của reference_stats — vốn đã lọc data_source='historical' ở
-    load_reference_stats, nên không bị trôi phân phối qua các ngày synthetic trước đó.
-    """
+    """Sample n synthetic loan applications with noise drawn from reference_stats."""
     rng = np.random.default_rng(seed)
 
     client_ids = rng.choice(reference_stats["client_id"].to_numpy(), size=n, replace=True)
@@ -91,10 +76,12 @@ def upsert_loans(df: pd.DataFrame) -> None:
     engine = get_engine()
     today = date.today()
     df = df.copy()
+    # Keyed on application_ref (client_id + date hash), not loan_id — loan_id is a SERIAL
+    # and would never match on conflict.
     df["application_ref"] = [make_application_ref(cid, today) for cid in df["client_id"]]
     df["loan_date"] = today
     df["data_source"] = "synthetic_daily"
-    df["loan_status"] = None  # chờ model dự đoán, không phải nhãn thật
+    df["loan_status"] = None  # pending model prediction, not a real label
 
     columns = list(df.columns)
     insert_cols = ", ".join(columns)
@@ -116,4 +103,4 @@ if __name__ == "__main__":
     n = int(np.random.randint(50, 101))
     new_apps = sample_new_applications(n, reference_stats)
     upsert_loans(new_apps)
-    print(f"Đã upsert {len(new_apps)} hồ sơ synthetic cho ngày {date.today()}.")
+    print(f"Upserted {len(new_apps)} synthetic applications for {date.today()}.")

@@ -1,5 +1,5 @@
-# Buổi 5: wrapper cho Windows Task Scheduler — đảm bảo chạy đúng cwd (để load_dotenv()
-# tìm thấy .env) và ghi log lại vì scheduled task không hiện console output.
+# Windows Task Scheduler wrapper: sets cwd so load_dotenv() finds .env, and logs to
+# file since the scheduled run has no visible console.
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -14,6 +14,6 @@ try {
     $output | Out-File -FilePath $log -Append -Encoding utf8
     "$(Get-Date -Format o) - finished daily_ingest (exit $LASTEXITCODE)" | Out-File -FilePath $log -Append -Encoding utf8
 } catch {
-    "$(Get-Date -Format o) - FAILED: $_" | Out-File -FilePath $log -Append -Encoding utf8
+    "$(Get-Date -Format o) - FAILED: $($_ | Out-String)" | Out-File -FilePath $log -Append -Encoding utf8
     throw
 }
