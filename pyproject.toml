@@ -1,0 +1,20 @@
+[project]
+name = "credit-risk-pipeline"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "psycopg2-binary",
+    "sqlalchemy",
+    "pandas",
+    "scikit-learn",
+    "xgboost",
+    "imbalanced-learn",
+    "shap",
+    "streamlit",
+    "plotly",
+    "openpyxl",
+    "joblib",
+    "python-dotenv",
+]
