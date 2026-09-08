@@ -18,7 +18,7 @@ Facts and patterns discovered while working on this repo. Append here when somet
 
 - Local dev environment actually runs **Python 3.14.3 via `uv`** (`.venv/`), not 3.11 — `CLAUDE.md` said 3.11 until this session corrected it. Docker Desktop + `credit-db` (Postgres 16) container. VSCode extension `ms-ossdata.vscode-pgsql` is the query tool in use, not pgAdmin/DBeaver.
 - `etl/config.py` didn't call `load_dotenv()` when the scaffold was first inspected — every script raised `KeyError` on `os.environ['DB_USER']` despite `.env` existing and `python-dotenv` being a listed dependency. Fixed by adding `load_dotenv()` at module import time.
-- `customers.age` is `NOT NULL`, but `historical_load.py::clean_outliers` only caps `person_age > 100` to `NaN` — it never imputes. 5 real rows hit this and would fail the `NOT NULL` insert. Decided (user-confirmed) to median-impute `person_age` in `impute_missing()` too, as a stopgap alongside `emp_length`/`loan_int_rate`; full strategy still open for buổi 8 EDA.
+- `customers.age` is `NOT NULL`, but `historical_load.py::clean_outliers` only caps `person_age > 100` to `NaN` — it never imputes. 5 real rows hit this and would fail the `NOT NULL` insert. Decided (user-confirmed) to median-impute `person_age` in `impute_missing()` too, as a stopgap alongside `emp_length`/`loan_int_rate`; buổi 8 EDA later confirmed this was a reasonable choice (see below).
 - `historical_load.py`'s `SOURCE_FILE` is `data/Credit_Risk_Dataset.xlsx`, resolved against **cwd** — scripts must run from the repo root, not from inside `etl/`.
 - Windows console is cp1252 by default; scripts that `print()` Vietnamese text need `sys.stdout.reconfigure(encoding="utf-8")` in `__main__`, or they crash with `UnicodeEncodeError` on the last line — after the DB work already succeeded. Fixed in both `historical_load.py` and `daily_ingest.py`.
 - `daily_ingest.py`'s `application_ref = hash(client_id + today)`: if a day's random sample draws the same `client_id` twice, the second upsert overwrites the first — that day's stored row count can be a little less than `n` generated. Expected, verified via fixed-seed re-run test (row count stayed flat across two identical-seed runs).
@@ -28,6 +28,30 @@ Facts and patterns discovered while working on this repo. Append here when somet
 - Root `.gitignore` said `venv/` but the real folder is `.venv/` — harmless in practice only because `uv` writes its own `.venv/.gitignore` (`*`) inside the venv itself. Fixed the root pattern anyway; don't rely on the inner file.
 - Windows Task Scheduler job `CreditRiskPipeline_DailyIngest` (daily 20:00, via `etl/run_daily_ingest.ps1`) is registered on this machine only — it is not tracked in git and won't exist after a fresh clone or on another machine. Only fires while logged into Windows, only succeeds if Docker is running.
 - Repo pushed to `https://github.com/CaoThien1402/credit-risk-pipeline` (public), default branch renamed `master` → `main`. `data/Credit_Risk_Dataset.xlsx` is committed to the repo — an explicit user choice, not the general best practice default.
+
+## 2026-09-08 — buổi 8: EDA (notebooks/01_eda.ipynb)
+
+- By the time data reaches Postgres, `loan_int_rate`/`emp_length`/`age` already have **zero
+  nulls** — `historical_load.py::impute_missing` ran before insert. To check the *original*
+  missingness pattern, the notebook loads `data/Credit_Risk_Dataset.xlsx` a second time,
+  separately from the `feature_engineering.sql` read.
+- `loan_int_rate` missing rate by `loan_grade`: A=9.3%, B=10.1%, C=9.8%, D=8.6%, E=8.6%,
+  F=11.2%, G=7.8% — flat, no trend.
+- `person_emp_length` missing rate by `employment_type`: Full-time=2.8%, Part-time=2.8%,
+  Self-employed=2.8%, **Unemployed=2.2%** (lowest, not highest — the intuitive guess that
+  unemployed applicants would be missing emp_length more often is wrong). Both patterns
+  read as **MCAR**, not MAR — median imputation (already applied) is a reasonable choice,
+  nothing more sophisticated is obviously justified by the missingness mechanism.
+- Cross-checked post-ETL: 0 rows with `age > 100` in Postgres, 0 rows violating
+  `emp_length <= age - 14`, age range 20-94. Confirms `clean_outliers` + `impute_missing`
+  did their job on the full 32,581-row load, not just the sample checked back in session 4.
+- `jupyter` and `kaleido` added as `uv` dev dependencies — neither was installed despite the
+  README instructing `jupyter notebook notebooks/01_eda.ipynb`. `kaleido` is what makes
+  `fig.write_image(...)` work for exporting static PNGs (used to save 3 figures into
+  `notebooks/figures/` for later README embedding in buổi 17).
+- Notebook executed end-to-end via `jupyter nbconvert --to notebook --execute --inplace`
+  (12 code cells, 0 errors) rather than just eyeballed — the committed `.ipynb` has real
+  output, not just source.
 
 ## Open questions — not yet resolved
 

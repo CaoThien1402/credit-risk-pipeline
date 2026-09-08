@@ -4,7 +4,7 @@ Credit risk & loan approval pipeline: Excel → PostgreSQL (4 normalized tables)
 
 Project memory (facts learned the hard way, dated): `docs/MEMORY.md`. Read it when picking up work on this repo.
 
-**Stack**: Python 3.14 (via `uv`, `.venv/`), PostgreSQL 16 (Docker), SQLAlchemy 2.x, scikit-learn, XGBoost, SHAP, Streamlit, Plotly.
+**Stack**: Python 3.14 (via `uv`, `.venv/`), PostgreSQL 16 (Docker), SQLAlchemy 2.x, scikit-learn, XGBoost, SHAP, Streamlit, Plotly. Dev-only deps (`uv add --dev`, not in main deps): `pytest`, `jupyter`, `kaleido` (static PNG export from Plotly figures).
 
 ## Structure
 
@@ -13,7 +13,7 @@ sql/       schema.sql (DDL + rationale comments), feature_engineering.sql (CTE f
 etl/       historical_load.py, daily_ingest.py, config.py (DB connection),
            run_daily_ingest.ps1 (Windows Task Scheduler wrapper, see below)
 data/      Credit_Risk_Dataset.xlsx — committed to the repo (not gitignored)
-notebooks/ 01_eda.ipynb
+notebooks/ 01_eda.ipynb, figures/ (PNGs exported for the README, via kaleido)
 models/    *.pkl joblib bundles — gitignored, not committed
 app/       app.py (Streamlit, 2 tabs), utils.py
 tests/     pytest, mirrors etl/ functions
@@ -27,6 +27,7 @@ docker exec -i credit-db psql -U postgres -d credit_db -f sql/schema.sql   # or 
 python etl/historical_load.py    # run from repo root — SOURCE_FILE is cwd-relative
 python etl/daily_ingest.py       # run from repo root
 uv run pytest tests/             # pytest is a dev dependency, not in the main deps
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
 streamlit run app/app.py
 ```
 
@@ -42,7 +43,7 @@ streamlit run app/app.py
 
 **Don't reintroduce `loan_to_income_ratio`.** Dropped in `drop_redundant_columns` — correlation with `loan_percent_income` is 0.9989 on the real data; keeping both just splits SHAP importance for one signal.
 
-**`customers.age` is `NOT NULL`, but `clean_outliers` only caps it to `NaN` — it doesn't impute.** 5 real rows (age 144/123) hit this. `impute_missing()` median-imputes `person_age` too, alongside `emp_length`/`loan_int_rate`, as a stopgap so the historical load doesn't fail on the `NOT NULL` constraint. This was a judgment call (user-confirmed), not part of the original session 3-4 prompt — the real imputation strategy (median vs. KNN vs. group-median) is still open for session 8's EDA to revisit. Don't remove the `person_age` line from `impute_missing()` without replacing it with something else that keeps every row's age non-null before insert.
+**`customers.age` is `NOT NULL`, but `clean_outliers` only caps it to `NaN` — it doesn't impute.** 5 real rows (age 144/123) hit this. `impute_missing()` median-imputes `person_age` too, alongside `emp_length`/`loan_int_rate`, as a stopgap so the historical load doesn't fail on the `NOT NULL` constraint. This was a judgment call (user-confirmed), not part of the original session 3-4 prompt. Session 8's EDA confirmed median imputation is reasonable: `loan_int_rate` missingness is flat across `loan_grade` (7.8-11.2%) and `person_emp_length` missingness is flat across `employment_type` (2.2-2.8%, `Unemployed` is *not* the highest) — both look MCAR, not MAR, so there's no grade/group signal a smarter imputer would exploit. Don't remove the `person_age` line from `impute_missing()` without replacing it with something else that keeps every row's age non-null before insert.
 
 **The plan doc says "5 bảng" in a couple of places** (leftover from a v1 draft that had a separate `locations` table) **but the actual schema has 4**: `cities`, `customers`, `credit_bureau`, `loans`. Don't go looking for a 5th table — it doesn't exist and isn't needed.
 
