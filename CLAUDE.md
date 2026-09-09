@@ -58,6 +58,22 @@ streamlit run app/app.py
 - Model artifacts save as a bundle dict (`model`, `preprocessor`, `feature_names`, `trained_at`, `metrics`), never a bare model — `app.py` needs the preprocessor to transform new input consistently.
 - Feature logic lives in `sql/feature_engineering.sql`, not duplicated in pandas. Read the file and run it via `pd.read_sql`; don't rewrite the joins in Python.
 
+## Git workflow (adopted 2026-09-09)
+
+Every change goes through a feature branch → PR → self-review → merge, even solo —
+this is a deliberate habit-building choice (common in real DE/DS job descriptions),
+not overhead to skip. Never commit straight to `main`. Concretely:
+
+1. `git checkout -b <type>/<short-description>` (e.g. `feat/session-9-baseline`)
+2. Commit, push the branch, open a PR with `gh pr create` and a clear description
+   (what changed, why, how it was verified)
+3. Self-review the diff (`gh pr diff`) — GitHub won't let the author formally
+   "Approve" their own PR, so this is a read-through, not a clicked approval
+4. Merge (`gh pr merge --squash --delete-branch`) once CI is green
+
+CI (`.github/workflows/ci.yml`) runs `pytest` via GitHub Actions on every push and
+on PRs to `main`. A red check is a signal to fix before merging, not to ignore.
+
 ## Local machine state (not in git, won't exist after a fresh clone)
 
 - Windows Task Scheduler job `CreditRiskPipeline_DailyIngest` — runs `etl/run_daily_ingest.ps1` daily at 20:00. Only fires while the user is logged into Windows; only succeeds if Docker Desktop is running at the time. Check/edit via `Get-ScheduledTask -TaskName CreditRiskPipeline_DailyIngest` or Task Scheduler GUI.
