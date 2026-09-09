@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - credit_db_data:/var/lib/postgresql/data
+      - ./db-seed:/docker-entrypoint-initdb.d
 
 volumes:
   credit_db_data:
