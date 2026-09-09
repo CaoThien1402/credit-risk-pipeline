@@ -69,6 +69,50 @@ Facts and patterns discovered while working on this repo. Append here when somet
 - Not a code bug — no session 9-11 code exists yet, so nothing needed fixing in `etl/`
   or notebooks. Purely a plan/doc gap caught before it could produce a real leak.
 
+## 2026-09-09 — plan v3 adopted, db-seed infra, generalized leakage scan
+
+- User got a v3 rewrite of the plan from a separate Claude chat
+  (`docs/Credit_Risk_Pipeline_Plan_v3.md`) and asked to reconcile it. v3's real
+  content deltas: (a) a portable DB-seed workflow via
+  `docker-entrypoint-initdb.d`, (b) buổi 8 rewritten to teach a general leakage-
+  detection *method* instead of stating the dataset's specific numbers upfront
+  (to avoid `CLAUDE.md`/`MEMORY.md` "spoiling" the discovery for someone starting
+  fresh), (c) a rule to delay adding `CLAUDE.md`/`MEMORY.md` to a fresh repo until
+  buổi 10, for the same reason.
+- **v3 reintroduced the "5 bảng" bug** that was fixed in v2 — it was drafted from
+  scratch in a different chat with no access to that earlier fix. Re-applied the
+  same 7-spot correction (4 tables: `cities`, `customers`, `credit_bureau`,
+  `loans`). If the plan doc gets externally regenerated again, check this first.
+- **`docs/Credit_Risk_Pipeline_Plan_v2.md` was deleted** (by the user, outside
+  the chat) and **v3 is now the canonical plan** — updated `README.md` and
+  `CLAUDE.md` to point at v3. Old entries in this file that still say "v2" are
+  historical and were true when written; they're not being rewritten.
+- **Did not apply** v3's "delay `CLAUDE.md`/`MEMORY.md` to buổi 10" rule
+  retroactively (user's explicit decision) — buổi 8 in this repo was already
+  computed for real (the MCAR finding even contradicted the initial guess about
+  `Unemployed`/`emp_length`), so there was nothing to "spoil." That rule is for
+  someone starting the plan fresh, not applicable mid-project.
+- **Implemented the db-seed workflow**: `docker-compose.yml` now mounts
+  `./db-seed:/docker-entrypoint-initdb.d`; `scripts/dump_db.sh` runs
+  `pg_dump --clean --if-exists` into `db-seed/01_seed.sql`. Verified end-to-end:
+  `docker compose down -v && docker compose up -d` restores all 4 tables and the
+  full 32,581-row historical dataset with no ETL run. `db-seed/01_seed.sql` is
+  ~9MB, committed (not gitignored) — same call as committing the raw dataset.
+- **Extended `notebooks/01_eda.ipynb`** with v3's generalized leakage-scan
+  method: default-rate spread across *every* categorical column
+  (`loan_grade`=88.5 points, next-highest `home_ownership`=24.1, `country`≈0) and
+  within-group variance ratio for every numeric-categorical pair (`loan_grade`→
+  `loan_int_rate`=0.39, next-lowest pair=0.62). `loan_grade`/`loan_int_rate` top
+  both scans by a wide margin — the general method reproduces the session 8
+  conclusion without hardcoding which columns to check. Re-executed, 14 code
+  cells, 0 errors.
+- Added a `CLAUDE.md` constraint for session 9+: preprocessing must use
+  `sklearn.pipeline.Pipeline` + `ColumnTransformer` (`OneHotEncoder` for nominal
+  categoricals, `StandardScaler` for numerics), fit only on the train split —
+  this came from a separate curriculum note the user is following (interview-
+  prep: explain *why* scaling happens after the split and why not
+  `LabelEncoder`), not from the plan doc itself.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.

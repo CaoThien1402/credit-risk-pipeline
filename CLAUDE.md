@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Credit risk & loan approval pipeline: Excel → PostgreSQL (4 normalized tables) → SQL feature view → XGBoost model → Streamlit app. Solo portfolio project, built session-by-session (see `docs/Credit_Risk_Pipeline_Plan_v2.md`).
+Credit risk & loan approval pipeline: Excel → PostgreSQL (4 normalized tables) → SQL feature view → XGBoost model → Streamlit app. Solo portfolio project, built session-by-session (see `docs/Credit_Risk_Pipeline_Plan_v3.md` — v3 supersedes v2, which has been deleted; don't recreate it).
 
 Project memory (facts learned the hard way, dated): `docs/MEMORY.md`. Read it when picking up work on this repo.
 
@@ -17,15 +17,20 @@ notebooks/ 01_eda.ipynb, figures/ (PNGs exported for the README, via kaleido)
 models/    *.pkl joblib bundles — gitignored, not committed
 app/       app.py (Streamlit, 2 tabs), utils.py
 tests/     pytest, mirrors etl/ functions
+scripts/   dump_db.sh — snapshots the running DB into db-seed/
+db-seed/   01_seed.sql — mounted at /docker-entrypoint-initdb.d, Postgres auto-loads it
+           on an empty volume; refresh via scripts/dump_db.sh after changing the data
 ```
 
 ## Commands
 
 ```bash
-docker compose up -d
-docker exec -i credit-db psql -U postgres -d credit_db -f sql/schema.sql   # or psql -h localhost if you have a client installed
+docker compose up -d             # db-seed/01_seed.sql auto-loads on an empty volume —
+                                  # no need to re-run the ETL just to get data back
+docker exec -i credit-db psql -U postgres -d credit_db -f sql/schema.sql   # only needed if rebuilding from scratch (empty db-seed/)
 python etl/historical_load.py    # run from repo root — SOURCE_FILE is cwd-relative
 python etl/daily_ingest.py       # run from repo root
+bash scripts/dump_db.sh          # refresh db-seed/01_seed.sql after changing the data
 uv run pytest tests/             # pytest is a dev dependency, not in the main deps
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
 streamlit run app/app.py
@@ -47,7 +52,9 @@ streamlit run app/app.py
 
 **`customers.age` is `NOT NULL`, but `clean_outliers` only caps it to `NaN` — it doesn't impute.** 5 real rows (age 144/123) hit this. `impute_missing()` median-imputes `person_age` too, alongside `emp_length`/`loan_int_rate`, as a stopgap so the historical load doesn't fail on the `NOT NULL` constraint. This was a judgment call (user-confirmed), not part of the original session 3-4 prompt. Session 8's EDA confirmed median imputation is reasonable: `loan_int_rate` missingness is flat across `loan_grade` (7.8-11.2%) and `person_emp_length` missingness is flat across `employment_type` (2.2-2.8%, `Unemployed` is *not* the highest) — both look MCAR, not MAR, so there's no grade/group signal a smarter imputer would exploit. Don't remove the `person_age` line from `impute_missing()` without replacing it with something else that keeps every row's age non-null before insert.
 
-**The plan doc says "5 bảng" in a couple of places** (leftover from a v1 draft that had a separate `locations` table) **but the actual schema has 4**: `cities`, `customers`, `credit_bureau`, `loans`. Don't go looking for a 5th table — it doesn't exist and isn't needed.
+**The schema has 4 tables**: `cities`, `customers`, `credit_bureau`, `loans`. This has been mis-stated as "5 bảng" twice now — once in the original v1 draft (had a separate `locations` table), and again when v3 of the plan was drafted from scratch in a different chat that didn't know about the v2 fix. If the plan doc gets regenerated or edited externally again, re-check this number before trusting it.
+
+**Session 9+ preprocessing must use `sklearn.pipeline.Pipeline` + `ColumnTransformer`, fit only on the train split.** `OneHotEncoder` for nominal categoricals (`home_ownership`, `loan_intent`, `gender`, `marital_status`, `education_level`, `employment_type`, `default_on_file`, `country`) — not `LabelEncoder`, which imposes a false ordinal relationship a linear model can misread. `StandardScaler` for numeric columns, inside the same `ColumnTransformer`, fit via `Pipeline.fit(X_train, ...)` *after* `train_test_split` — fitting on the full dataset first leaks test-set statistics into training. Write this by hand once in session 9; it's reused as-is for session 10-11 (XGBoost) and saved as `preprocessor` in the session 12 model bundle.
 
 ## Conventions
 
@@ -80,4 +87,4 @@ on PRs to `main`. A red check is a signal to fix before merging, not to ignore.
 - GitHub remote: `https://github.com/CaoThien1402/credit-risk-pipeline` (public), default branch `main`.
 - VSCode extension `ms-ossdata.vscode-pgsql` is the ad-hoc query tool in use here (not pgAdmin/DBeaver as the plan doc suggests) — already connected to `localhost:5432` / `credit_db`.
 
-Full schema + rationale for every constraint: `sql/schema.sql`. Full session-by-session plan: `docs/Credit_Risk_Pipeline_Plan_v2.md`.
+Full schema + rationale for every constraint: `sql/schema.sql`. Full session-by-session plan: `docs/Credit_Risk_Pipeline_Plan_v3.md`.
