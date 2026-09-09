@@ -95,6 +95,8 @@ loans
 
 **Kết quả buổi**: 1 câu SQL trả về bảng feature đầy đủ, chỉ chứa dữ liệu lịch sử có nhãn thật, sẵn sàng đọc vào Python bằng SQLAlchemy.
 
+⚠️ **Lưu ý cho buổi 9-11**: 3 cột window function (`avg_loan_amnt_by_age_bucket`, `default_rate_by_grade`, `util_rank_in_country`) là cột tổng hợp cho dashboard (buổi 15-16), KHÔNG phải input cho model. `default_rate_by_grade` tính trực tiếp bằng `AVG(loan_status)` — tức là chính target — trên toàn bộ tập historical trước khi chia train/test, nên dùng làm feature sẽ là leakage nghiêm trọng hơn cả `loan_grade`. Hai cột còn lại cũng được tính trên toàn bộ population (không theo từng fold train/test), nên cũng không dùng làm feature.
+
 ---
 
 ## Buổi 8 — EDA & xử lý missing 🔧
@@ -111,7 +113,7 @@ loans
 ## Buổi 9 — Baseline model 🔧
 
 **Prompt AI**:
-> "Viết 2 pipeline scikit-learn Logistic Regression với class_weight='balanced', train/test split stratify theo loan_status: (a) *portfolio* — dùng đầy đủ feature kể cả loan_grade, loan_int_rate; (b) *at-application* — loại bỏ loan_grade và loan_int_rate, chỉ dùng thông tin thô của khách hàng và credit_bureau. Đánh giá cả 2 bằng ROC-AUC và Precision-Recall AUC, in bảng so sánh chênh lệch."
+> "Đọc dữ liệu qua sql/feature_engineering.sql nhưng CHỈ lấy các cột gốc, bỏ 3 cột window function (avg_loan_amnt_by_age_bucket, default_rate_by_grade, util_rank_in_country) — đây là cột tổng hợp cho dashboard, default_rate_by_grade tính trực tiếp từ loan_status nên là leakage nếu dùng làm feature. Viết 2 pipeline scikit-learn Logistic Regression với class_weight='balanced', train/test split stratify theo loan_status: (a) *portfolio* — dùng đầy đủ feature kể cả loan_grade, loan_int_rate; (b) *at-application* — loại bỏ loan_grade và loan_int_rate, chỉ dùng thông tin thô của khách hàng và credit_bureau. Đánh giá cả 2 bằng ROC-AUC và Precision-Recall AUC, in bảng so sánh chênh lệch."
 
 **Kết quả buổi**: 2 baseline, thấy rõ bằng số liệu mức độ leakage giữa 2 feature set — dùng để quyết định model nào đưa vào Streamlit ở buổi 13.
 

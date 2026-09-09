@@ -53,6 +53,22 @@ Facts and patterns discovered while working on this repo. Append here when somet
   (12 code cells, 0 errors) rather than just eyeballed — the committed `.ipynb` has real
   output, not just source.
 
+## 2026-09-09 — plan correction: window-function columns are not model features
+
+- User asked why buổi 9's prompt talks about "raw" customer/credit_bureau info when
+  Postgres already holds cleaned data — root cause was an undocumented gap, not a
+  misunderstanding: `sql/feature_engineering.sql`'s 3 window columns
+  (`avg_loan_amnt_by_age_bucket`, `default_rate_by_grade`, `util_rank_in_country`) were
+  built for the buổi 15-16 dashboard, but the plan never said "don't feed these into a
+  model." `default_rate_by_grade` is `AVG(loan_status)` over the whole historical table
+  — a direct target leak, worse than `loan_grade` alone, since it's computed before any
+  train/test split exists.
+- Fixed in `docs/Credit_Risk_Pipeline_Plan_v2.md`: added a warning after buổi 6-7's
+  result line, and prepended an explicit "select base columns only" instruction to buổi
+  9's prompt. Also added as a `CLAUDE.md` critical constraint.
+- Not a code bug — no session 9-11 code exists yet, so nothing needed fixing in `etl/`
+  or notebooks. Purely a plan/doc gap caught before it could produce a real leak.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.
