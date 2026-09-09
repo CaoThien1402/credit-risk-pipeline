@@ -1,6 +1,6 @@
 # Credit Risk & Loan Approval Pipeline
 
-Scaffold for the 17-session plan in `docs/Credit_Risk_Pipeline_Plan_v2.md`, with fixes already
+Scaffold for the 17-session plan in `docs/Credit_Risk_Pipeline_Plan_v3.md`, with fixes already
 integrated from a direct audit of `Credit_Risk_Dataset.xlsx` (32,581 rows, 29 columns).
 
 ## Differences from the original plan
@@ -34,6 +34,10 @@ credit-risk-pipeline/
 │   └── utils.py
 ├── tests/
 │   └── test_placeholder.py      # tests for the key ETL functions
+├── scripts/
+│   └── dump_db.sh                # snapshots the running DB into db-seed/
+├── db-seed/
+│   └── 01_seed.sql                # auto-loaded by Postgres on an empty volume
 ├── docker-compose.yml           # Postgres
 ├── requirements.txt
 └── .env.example
@@ -41,12 +45,22 @@ credit-risk-pipeline/
 
 ## Running from scratch
 
+Fastest path — restore the committed snapshot instead of re-running the ETL:
+
 ```bash
 cp .env.example .env               # set a real password
+docker compose up -d               # db-seed/01_seed.sql auto-loads on first init
+jupyter notebook notebooks/01_eda.ipynb
+streamlit run app/app.py
+```
+
+To rebuild that snapshot from the raw dataset instead:
+
+```bash
+cp .env.example .env
 docker compose up -d
 psql -h localhost -U postgres -d credit_db -f sql/schema.sql
 python etl/historical_load.py
 python etl/daily_ingest.py
-jupyter notebook notebooks/01_eda.ipynb
-streamlit run app/app.py
+bash scripts/dump_db.sh             # refreshes db-seed/01_seed.sql
 ```
