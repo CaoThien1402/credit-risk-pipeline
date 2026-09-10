@@ -27,7 +27,11 @@ credit-risk-pipeline/
 │   ├── historical_load.py       # bulk-loads the historical dataset
 │   └── daily_ingest.py          # simulates new daily applications
 ├── notebooks/
-│   └── 01_eda.ipynb             # EDA, with a checklist
+│   ├── 01_eda.ipynb             # EDA, with a checklist
+│   └── 02_baseline_model.ipynb  # session 9: baseline Logistic Regression, 2 feature sets
+├── model/
+│   ├── features.py              # column bookkeeping (id/target/leakage/categorical)
+│   └── preprocessing.py         # ColumnTransformer + Pipeline, written by hand
 ├── models/                      # model bundles (.pkl) saved here
 ├── app/
 │   ├── app.py                   # Streamlit, 2 tabs

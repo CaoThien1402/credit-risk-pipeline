@@ -147,6 +147,41 @@ Facts and patterns discovered while working on this repo. Append here when somet
   was left as-is (historical record of what was actually asked/built then);
   the architecture evolving afterward doesn't rewrite what that session did.
 
+## 2026-09-10 — session 9 scaffold: ml_features column gap fixed, model/ created
+
+- `ml_features` (created in the PR #4 view split) was missing 6 real, 100%-populated
+  columns that buổi 9's own prompt requires for `OneHotEncoder`/features: `gender`,
+  `marital_status`, `education_level`, `employment_type` (`customers`), `open_accounts`
+  (`credit_bureau`), plus `other_debt`, `loan_term_months` (`loans`). Traced back to the
+  original buổi 6-7 CTE, which never selected them — carried through unchanged by the
+  view split. Verified via `count(*) FILTER (WHERE col IS NOT NULL)` that all 7 are
+  fully populated (32,581/32,581) before adding them, so this is a real gap, not an
+  intentional omission.
+- Fixing it hit a real Postgres constraint: `CREATE OR REPLACE VIEW` can only *append*
+  columns at the end, not reorder/insert them — reordering the `SELECT` list raises
+  `cannot change name of view column`. New columns were appended after the original
+  buổi 6-7 columns instead of interleaved. `dashboard_aggregates` (`SELECT * FROM
+  ml_features` + window functions) needed a `DROP VIEW` + recreate, not just `CREATE OR
+  REPLACE`, since the `*` expansion shifted its column positions too. Documented both
+  gotchas as comments in `sql/views.sql` for next time a column gets added.
+  `ml_features` is now 25 columns (was 18), `dashboard_aggregates` 28 (was 21); row
+  counts unchanged (32,581). Re-verified portability with a full
+  `docker compose down -v && up -d` cycle, then refreshed `db-seed/01_seed.sql`.
+- Created `model/features.py` (column bookkeeping: `ID_COLS`, `TARGET_COL`,
+  `LEAKAGE_COLS`, `NOMINAL_CATEGORICAL_COLS`, `get_feature_columns`,
+  `split_numeric_categorical`) and `model/preprocessing.py` — the latter's
+  `build_preprocessor()`/`build_pipeline()` are deliberately left as
+  `NotImplementedError` stubs. Buổi 9's own text says to write the
+  `ColumnTransformer`/`Pipeline` by hand, not have the AI agent generate it, so the
+  interview-explainability goal isn't hollowed out — same spirit as buổi 8's
+  self-derived leakage analysis. Scaffolding (data load, feature-set split, stratified
+  train/test split) was written normally since it's plumbing, not the graded exercise.
+- `notebooks/02_baseline_model.ipynb` created and executed up to (and confirmed
+  stopping exactly at) the `NotImplementedError` in the pipeline-training cell —
+  everything before it (DB load via `ml_features`, `df.shape`, feature column lists,
+  stratified split) runs clean. No ROC-AUC/PR-AUC numbers exist yet; those depend on
+  the user's own `build_pipeline()` implementation.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.
