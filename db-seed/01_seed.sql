@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict g0gh0Ld9gcSqpoirPaSvqtk3jOS2PUtcONeqxLq3QR6uMT1bKyhIsuvphf61hQt
+\restrict 40aKruLzxCjDHjLyUh39wuicIbc5g8gNUHXyObDWpKqE1ig2l0TR06LdZVmA4dW
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -180,7 +180,14 @@ CREATE VIEW public.ml_features AS
     cb.cred_hist_length,
     cb.credit_utilization_ratio,
     cb.past_delinquencies,
-    ci.country
+    ci.country,
+    l.loan_term_months,
+    l.other_debt,
+    c.gender,
+    c.marital_status,
+    c.education_level,
+    c.employment_type,
+    cb.open_accounts
    FROM (((public.loans l
      JOIN public.customers c ON (((c.client_id)::text = (l.client_id)::text)))
      JOIN public.credit_bureau cb ON (((cb.client_id)::text = (l.client_id)::text)))
@@ -213,6 +220,13 @@ CREATE VIEW public.dashboard_aggregates AS
     credit_utilization_ratio,
     past_delinquencies,
     country,
+    loan_term_months,
+    other_debt,
+    gender,
+    marital_status,
+    education_level,
+    employment_type,
+    open_accounts,
     avg(loan_amnt) OVER (PARTITION BY ((age / 10) * 10)) AS avg_loan_amnt_by_age_bucket,
     avg((loan_status)::numeric) OVER (PARTITION BY loan_grade) AS default_rate_by_grade,
     rank() OVER (PARTITION BY country ORDER BY credit_utilization_ratio DESC) AS util_rank_in_country
@@ -98240,5 +98254,5 @@ ALTER TABLE ONLY public.loans
 -- PostgreSQL database dump complete
 --
 
-\unrestrict g0gh0Ld9gcSqpoirPaSvqtk3jOS2PUtcONeqxLq3QR6uMT1bKyhIsuvphf61hQt
+\unrestrict 40aKruLzxCjDHjLyUh39wuicIbc5g8gNUHXyObDWpKqE1ig2l0TR06LdZVmA4dW
 
