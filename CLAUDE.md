@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Credit risk & loan approval pipeline: Excel → PostgreSQL (4 normalized tables) → SQL feature view → XGBoost model → Streamlit app. Solo portfolio project, built session-by-session (see `docs/Credit_Risk_Pipeline_Plan_v3.md` — v3 supersedes v2, which has been deleted; don't recreate it).
+Credit risk & loan approval pipeline: Excel → PostgreSQL (4 normalized tables) → SQL feature views → XGBoost model → Streamlit app. Solo portfolio project, built session-by-session (see `docs/Credit_Risk_Pipeline_Plan_v3.md` — v3 supersedes v2, which has been deleted; don't recreate it).
 
 Project memory (facts learned the hard way, dated): `docs/MEMORY.md`. Read it when picking up work on this repo.
 
@@ -9,7 +9,9 @@ Project memory (facts learned the hard way, dated): `docs/MEMORY.md`. Read it wh
 ## Structure
 
 ```
-sql/       schema.sql (DDL + rationale comments), feature_engineering.sql (CTE feature view)
+sql/       schema.sql (DDL + rationale comments), views.sql (ml_features — base columns
+           for training; dashboard_aggregates — ml_features + window-function columns
+           for Streamlit only. Two separate views, not one query — see Critical constraints.)
 etl/       historical_load.py, daily_ingest.py, config.py (DB connection),
            run_daily_ingest.ps1 (Windows Task Scheduler wrapper, see below)
 data/      Credit_Risk_Dataset.xlsx — committed to the repo (not gitignored)
@@ -28,6 +30,7 @@ db-seed/   01_seed.sql — mounted at /docker-entrypoint-initdb.d, Postgres auto
 docker compose up -d             # db-seed/01_seed.sql auto-loads on an empty volume —
                                   # no need to re-run the ETL just to get data back
 docker exec -i credit-db psql -U postgres -d credit_db -f sql/schema.sql   # only needed if rebuilding from scratch (empty db-seed/)
+docker exec -i credit-db psql -U postgres -d credit_db -f sql/views.sql    # ditto — views, re-run only if their definitions change
 python etl/historical_load.py    # run from repo root — SOURCE_FILE is cwd-relative
 python etl/daily_ingest.py       # run from repo root
 bash scripts/dump_db.sh          # refresh db-seed/01_seed.sql after changing the data
@@ -40,9 +43,9 @@ streamlit run app/app.py
 
 **Never add `loan_grade` or `loan_int_rate` to the at-application feature set** (ETL output used by the model, notebooks, `app.py`'s prediction tab). Verified on the real data: grade is a near-total predictor of default, and `loan_int_rate` is near-deterministic given grade (numbers in `docs/MEMORY.md`). Both are outputs of an underwriting step that happens *after* the decision this model exists to make — including them is leakage that inflates AUC and produces a model nobody can actually run at application time. They're fine in `portfolio_risk_model.pkl`, a separate, explicitly-labeled model for analyzing the existing book.
 
-**Never use `sql/feature_engineering.sql`'s three window-function columns as model input.** `avg_loan_amnt_by_age_bucket`, `default_rate_by_grade`, and `util_rank_in_country` are dashboard/EDA aggregates (sessions 15-16), not features. `default_rate_by_grade` is literally `AVG(loan_status)` — the target itself — computed over the whole historical table before any train/test split; using it as a feature is a worse leak than `loan_grade` alone. The other two are computed over the full population too (not per-fold), so they leak test-set distribution into training. Session 9+ must select the base columns only.
+**Training code queries `ml_features`, never `dashboard_aggregates`.** `sql/views.sql` splits these into two separate Postgres views specifically so this isn't just a comment to remember — `dashboard_aggregates` (session 15-16 Streamlit only) adds three window-function columns (`avg_loan_amnt_by_age_bucket`, `default_rate_by_grade`, `util_rank_in_country`) on top of `ml_features`. `default_rate_by_grade` is literally `AVG(loan_status)` — the target itself — computed over the whole historical table before any train/test split; using it as a feature is a worse leak than `loan_grade` alone. The other two are computed over the full population too (not per-fold), so they leak test-set distribution into training. The view split is the primary safeguard; this line is a reminder, not the only one.
 
-**Never train on `data_source = 'synthetic_daily'` rows.** Those rows have `loan_status = NULL` (pending prediction) or a distribution-sampled label — not a real outcome either way. `sql/feature_engineering.sql` filters `WHERE data_source = 'historical'`; carry that filter into any new query against `loans`.
+**Never train on `data_source = 'synthetic_daily'` rows.** Those rows have `loan_status = NULL` (pending prediction) or a distribution-sampled label — not a real outcome either way. `ml_features` (in `sql/views.sql`) filters `WHERE data_source = 'historical'`; carry that filter into any new query against `loans`.
 
 **`daily_ingest.py` UPSERTs on `application_ref`, not `loan_id`.** `loan_id` is a SERIAL Postgres assigns fresh on every insert, so `ON CONFLICT (loan_id)` never actually fires. `application_ref` is a hash of `client_id + loan_date`, computed in Python before insert — keep it that way if you touch the ingestion logic.
 
@@ -63,7 +66,7 @@ streamlit run app/app.py
 - Windows' console defaults to cp1252. Any script whose `__main__` block prints Vietnamese text needs `sys.stdout.reconfigure(encoding="utf-8")`, or it crashes with `UnicodeEncodeError` on that print — after the actual DB work already succeeded. Don't mistake that crash for a data problem.
 - `daily_ingest.py`'s `application_ref = hash(client_id + today)` means if the random sample happens to draw the same `client_id` twice in one day's batch, the second upsert silently overwrites the first — the day's row count can be a little less than `n` generated. Expected, not a bug.
 - Model artifacts save as a bundle dict (`model`, `preprocessor`, `feature_names`, `trained_at`, `metrics`), never a bare model — `app.py` needs the preprocessor to transform new input consistently.
-- Feature logic lives in `sql/feature_engineering.sql`, not duplicated in pandas. Read the file and run it via `pd.read_sql`; don't rewrite the joins in Python.
+- Feature logic lives in `sql/views.sql`, not duplicated in pandas. Query `ml_features`/`dashboard_aggregates` via `pd.read_sql("SELECT * FROM ml_features", engine)`; don't rewrite the joins in Python.
 
 ## Git workflow (adopted 2026-09-09)
 

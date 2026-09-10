@@ -113,6 +113,40 @@ Facts and patterns discovered while working on this repo. Append here when somet
   prep: explain *why* scaling happens after the split and why not
   `LabelEncoder`), not from the plan doc itself.
 
+## 2026-09-10 — sql/feature_engineering.sql split into two views
+
+- Replaced the single ad-hoc CTE query (`sql/feature_engineering.sql`, read from
+  disk by `pd.read_sql`) with `sql/views.sql`, two real Postgres views:
+  `ml_features` (the old "base" CTE, 18 columns, `WHERE data_source='historical'`)
+  and `dashboard_aggregates` (`ml_features` + the 3 window-function columns, 21
+  columns total). Same joins, same filter, same window-function expressions —
+  no column added, renamed, or dropped; verified row counts (32,581) and column
+  counts (18 / 21) match the old combined query exactly before deleting it.
+- The point: "don't use the window columns as a feature" was previously only a
+  comment + a `CLAUDE.md` rule (i.e. relies on remembering to read them).
+  `ml_features` now structurally cannot expose those 3 columns — training code
+  querying it gets 18 columns, full stop. `CLAUDE.md`'s existing rule is now a
+  backup reminder, not the only safeguard.
+- `notebooks/01_eda.ipynb` updated to `pd.read_sql("SELECT * FROM ml_features")`
+  instead of reading the .sql file from disk — re-executed clean, `df.shape`
+  correctly dropped from `(32581, 21)` to `(32581, 18)`, 0 errors, no downstream
+  cell depended on the removed columns (confirmed before deleting the old file).
+- `app/app.py` doesn't reference `feature_engineering.sql` or duplicate the
+  window functions inline yet (session 13-16 UI is still just TODO placeholders)
+  — nothing to migrate there now, but when that Streamlit dashboard tab gets
+  built, it should read `dashboard_aggregates`, not `ml_features`.
+- Re-ran `scripts/dump_db.sh` after creating the views, since `db-seed/01_seed.sql`
+  is a full `pg_dump` snapshot (schema + data + view definitions) taken *before*
+  `views.sql` existed — an un-refreshed seed would restore the 4 tables but not
+  the views. Verified end-to-end: `docker compose down -v && up -d` now restores
+  both views along with the data, no manual `psql -f sql/views.sql` needed.
+- `docs/Credit_Risk_Pipeline_Plan_v3.md`'s buổi 9 prompt referenced
+  `sql/feature_engineering.sql` by name and said to manually exclude the 3
+  window columns — updated to reference `ml_features` instead, since the
+  exclusion is now automatic. Buổi 6-7's text describing writing "1 câu SQL"
+  was left as-is (historical record of what was actually asked/built then);
+  the architecture evolving afterward doesn't rewrite what that session did.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.
