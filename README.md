@@ -12,7 +12,7 @@ integrated from a direct audit of `Credit_Risk_Dataset.xlsx` (32,581 rows, 29 co
 | 3 | `loan_percent_income` and `loan_to_income_ratio` are duplicates (corr=0.9989) | `etl/historical_load.py::drop_redundant_columns` |
 | 4 | Source data has no date column → monthly dashboard has no history | `etl/historical_load.py::backfill_loan_dates` |
 | 5 | `ON CONFLICT (loan_id)` doesn't work because `loan_id` is SERIAL | `sql/schema.sql` (`application_ref`), `etl/daily_ingest.py` |
-| 6 | Daily synthetic applications leak into the training set if not filtered | `sql/schema.sql` (`data_source`), `sql/feature_engineering.sql` |
+| 6 | Daily synthetic applications leak into the training set if not filtered | `sql/schema.sql` (`data_source`), `sql/views.sql` (`ml_features`) |
 | 7 | A `locations` table would repeat coordinates 32,581 times for only 18 real city combos | `sql/schema.sql` (separate `cities` table) |
 
 ## Structure
@@ -21,7 +21,7 @@ integrated from a direct audit of `Credit_Risk_Dataset.xlsx` (32,581 rows, 29 co
 credit-risk-pipeline/
 ├── sql/
 │   ├── schema.sql              # DDL — see the comments in the file for rationale
-│   └── feature_engineering.sql # CTE + window functions
+│   └── views.sql                # ml_features (training) + dashboard_aggregates (Streamlit)
 ├── etl/
 │   ├── config.py                # Postgres connection from .env
 │   ├── historical_load.py       # bulk-loads the historical dataset
@@ -49,7 +49,8 @@ Fastest path — restore the committed snapshot instead of re-running the ETL:
 
 ```bash
 cp .env.example .env               # set a real password
-docker compose up -d               # db-seed/01_seed.sql auto-loads on first init
+docker compose up -d               # db-seed/01_seed.sql auto-loads on first init — includes
+                                    # schema, data, and the ml_features/dashboard_aggregates views
 jupyter notebook notebooks/01_eda.ipynb
 streamlit run app/app.py
 ```
@@ -60,7 +61,12 @@ To rebuild that snapshot from the raw dataset instead:
 cp .env.example .env
 docker compose up -d
 psql -h localhost -U postgres -d credit_db -f sql/schema.sql
+psql -h localhost -U postgres -d credit_db -f sql/views.sql   # ml_features, dashboard_aggregates
 python etl/historical_load.py
 python etl/daily_ingest.py
 bash scripts/dump_db.sh             # refreshes db-seed/01_seed.sql
 ```
+
+`sql/views.sql` only needs to run once (or again if the view *definitions* change) —
+they're views, not materialized tables, so they always reflect live data. Re-running
+`daily_ingest.py` never requires re-running `sql/views.sql`.
