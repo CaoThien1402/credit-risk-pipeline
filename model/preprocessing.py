@@ -30,6 +30,15 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 def build_preprocessor(numeric_cols: list[str], categorical_cols: list[str]) -> ColumnTransformer:
     """StandardScaler on numeric_cols, OneHotEncoder on categorical_cols."""
+    # A column listed twice is transformed twice and silently duplicated in the output
+    # matrix - the fit still succeeds and the metrics still look reasonable, so nothing
+    # surfaces it. Cheap to rule out here.
+    overlap = sorted(set(numeric_cols) & set(categorical_cols))
+    if overlap:
+        raise ValueError(f"columns listed as both numeric and categorical: {overlap}")
+    if not numeric_cols and not categorical_cols:
+        raise ValueError("no columns given - the pipeline would train on an empty matrix")
+
     return ColumnTransformer(
         transformers=[
             ("num", StandardScaler(), numeric_cols),
@@ -42,8 +51,13 @@ def build_preprocessor(numeric_cols: list[str], categorical_cols: list[str]) -> 
             # data aged, not that the user typed nonsense.
             ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols),
         ],
-        # Fail loudly if a column reaches this that belongs to neither list, rather than
-        # silently dropping it - a dropped feature is invisible in the metrics.
+        # NOTE: "drop" means a column present in the input but absent from both lists is
+        # discarded with no warning - a feature you forgot to classify simply disappears
+        # and the metrics still look healthy. ColumnTransformer has no "raise on
+        # unlisted" option, so the actual guarantee comes from
+        # tests/test_features.py::test_every_feature_column_is_classified, which asserts
+        # split_numeric_categorical covers the whole feature set. Don't rely on this line
+        # to catch that mistake.
         remainder="drop",
         verbose_feature_names_out=False,
     )
