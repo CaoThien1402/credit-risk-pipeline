@@ -344,3 +344,281 @@ Xem **#11** ở trên — chỉ lộ ra khi query được `loan_date` của cá
 - **Phép quét leakage cho 7 cột mới (#1)**: vẫn để bạn tự chạy, có Docker rồi cũng không đổi — đây là bài tập buổi 8, không phải việc thiếu công cụ.
 - **Chạy thật `daily_ingest.py` để backfill**: chưa chạy. Job đã lên lịch sẽ tự bắn lúc 20:00 hôm nay; nếu chạy tay bây giờ thì ngày 2026-09-12 sẽ có 2 batch (mỗi lần sample `client_id` ngẫu nhiên khác nhau → `application_ref` khác nhau → không đè lên nhau). Vô hại vì dòng synthetic bị loại khỏi `ml_features`, nhưng là quyết định của bạn.
 - **`docker compose down -v` để test seed end-to-end**: cố ý không chạy, vì sẽ xoá 79 dòng synthetic — lịch sử pipeline thật đang tích luỹ. Đã kiểm tĩnh nội dung seed thay thế.
+
+
+---
+---
+
+# Review lần 2 — trước khi sang buổi 10
+
+**Ngày**: 2026-09-12 (sau khi đã xử lý #1, #3, #8)
+**Bối cảnh**: buổi 9 giờ đã có code thật và có số thật, nên lần review này soi được những thứ lần trước chỉ suy đoán.
+**Cách đọc**: 4 pass, mỗi pass ghi rõ đang dùng lăng kính nào. Cùng một file có thể bị soi 2 lần bằng 2 lăng kính khác nhau và ra 2 kết luận khác nhau — đó là chủ ý.
+
+## Đã xử lý từ review lần 1
+
+| # | Nội dung | Trạng thái |
+|---|---|---|
+| #1 | 7 cột chưa quét leakage | ✅ Đã quét toàn bộ 22 cột, dtype-driven. **Không có leakage.** Chi tiết ở pass 4 |
+| #2 | `loan_grade` vào nhánh numeric → crash | ✅ PR #8 |
+| #3 | `preprocessing.py` còn là stub | ✅ Đã implement, có số thật. Rule "tự viết tay" đã gỡ khỏi CLAUDE.md theo quyết định của bạn |
+| #4 | CI chạy trùng + không có Postgres | ✅ PR #11 |
+| #5 | Test coverage | ✅ 2 → 39 test |
+| #6 | `requirements.txt` lệch | ✅ PR #13, đã xoá |
+| #7 | `daily_ingest` không tái lập được | ✅ PR #12 |
+| #8 | Commit cả xlsx lẫn seed | ✅ Giữ cả hai, đã ghi lý do + cái giá vào README |
+| #9 | Tài liệu lệch code | ✅ Rải rác PR #11-#14 |
+| #10 | CLAUDE.md ra đời trước buổi 8 | ⚠️ Không sửa được (lịch sử), đã ghi nhận |
+| #11 | Daily ingest hỏng im lặng | ⚠️ Logging đã sửa (PR #10), **nguyên nhân gốc vẫn chưa rõ** |
+
+---
+
+## Pass 1 — TECH DEBT AUDIT
+
+*(Lăng kính: "cái gì sẽ cắn tôi ở buổi 10-11, cái gì chỉ là xấu mặt")*
+
+Backlog, không phải văn xuôi. Xếp theo mức độ sẽ gây đau thật.
+
+### P0 — sẽ cắn trong buổi 10-11
+
+**P0-1. `models/` chưa có gì, nhưng buổi 12 phụ thuộc vào format bundle.**
+`model/bundle.py::validate_bundle` đã tồn tại và có 10 test, nhưng **chưa có code nào gọi nó**. Buổi 12 mới `joblib.dump(...)`. Rủi ro: viết xong bundle rồi mới phát hiện thiếu key, lúc đó `app.py` buổi 13 mới chết. Cách chặn: gọi `validate_bundle(bundle)` ngay trước `joblib.dump` ở buổi 12 — 1 dòng.
+
+**P0-2. Trần của dataset thấp hơn bạn tưởng, và điều đó đổi kỳ vọng buổi 10.**
+9/22 feature là nhiễu thống kê (xem pass 4). Nghĩa là XGBoost buổi 10 sẽ **không** nhảy vọt so với 0.8072 — kỳ vọng hợp lý là +0.01~0.03 ROC-AUC. Nếu buổi 10 ra 0.95 thì đó là **dấu hiệu bug/leakage**, không phải thành công. Ghi trước con số kỳ vọng vào đây để buổi 10 không tự lừa mình.
+
+**P0-3. Ngưỡng quyết định duyệt/từ chối vẫn chưa chọn.** Buổi 13 cần nó. `predict_proba` mặc định cắt 0.5 là **sai** với base rate 21.8% cộng `class_weight="balanced"` — model đã được hiệu chỉnh lệch, nên 0.5 không còn là điểm trung tính. Đây là quyết định của bạn (cost của false negative vs false positive), không phải thứ agent nên tự chọn.
+
+### P1 — nên xử trước khi đi xa hơn
+
+**P1-1. Nguyên nhân `daily_ingest` fail 09-10/09-11 vẫn chưa biết.** Logging đã sửa nên lần sau sẽ rõ, nhưng hiện tại pipeline "tự động" của bạn đã **3 ngày không chạy được** (09-10, 09-11, và 09-12 chưa tới 20:00). Không có cảnh báo. Nếu kể chuyện này lúc phỏng vấn, câu hỏi kế tiếp chắc chắn là *"làm sao bạn biết khi nó hỏng?"*.
+
+**P1-2. `etl/historical_load.py:24` còn TODO về chiến lược impute** (median vs KNN). Buổi 8 đã kết luận median là hợp lý (missingness là MCAR), nhưng TODO chưa gỡ → người đọc tưởng còn bỏ ngỏ.
+
+**P1-3. `app/app.py` có 7 TODO, toàn bộ buổi 13-16 chưa bắt đầu.** Không phải nợ — đúng tiến độ. Ghi ở đây chỉ để backlog đầy đủ.
+
+### P2 — cosmetic, không chặn gì
+
+- `notebooks/01_eda.ipynb` cell 6 vẫn đọc `../data/Credit_Risk_Dataset.xlsx` trực tiếp để phân tích missingness gốc. Hợp lý (Postgres đã impute mất rồi), nhưng là chỗ duy nhất còn đọc Excel — nếu đổi đường dẫn file thì nhớ chỗ này.
+- `db-seed/01_seed.sql` đang lệch với DB sống (seed chụp 2026-09-10, DB giờ có thêm 79 dòng synthetic). Vô hại vì `ml_features` lọc chúng ra.
+
+### Đã đóng — không còn là nợ
+
+- ~~`sql/views.sql` chưa tách~~ → đã tách, có 5 test cấu trúc canh trong CI.
+- ~~Python 3.14 rủi ro pin~~ → **đóng hẳn**. xgboost 3.4.1, shap 0.52.0, sklearn 1.9.0, imblearn 0.14.2 đều bản stable, import sạch, không workaround. Không cần downgrade.
+- ~~`tests/` không canh thứ tự fit của ColumnTransformer~~ → có `test_notebook_does_not_fit_before_train_test_split`, đã verify 2 chiều.
+
+---
+
+## Pass 2 — ARCHITECTURE REVIEW
+
+*(Lăng kính: "thiết kế này còn đứng vững không khi code thật đã tồn tại")*
+
+Kiến trúc: Postgres (4 bảng) → SQL feature layer (2 view) → 2 model bundle → Streamlit.
+
+### Câu hỏi chính: danh sách cột thực tế có khớp với cái CLAUDE.md tuyên bố không?
+
+Chạy thật, không đọc code rồi đoán:
+
+```
+portfolio: 20 features (13 num + 7 cat)
+  leakage cols present   : ['loan_grade', 'loan_int_rate']
+  protected cols present : none
+  dashboard cols present : none
+
+at_application: 18 features (12 num + 6 cat)
+  leakage cols present   : none
+  protected cols present : none
+  dashboard cols present : none
+```
+
+**Khớp hoàn toàn.** Cả 3 ràng buộc kiến trúc đều đúng ở tầng code thật, không chỉ ở tầng tài liệu:
+
+1. `at_application` không có `loan_grade`/`loan_int_rate` — đúng thiết kế 2 model.
+2. Không feature set nào chạm `dashboard_aggregates` — việc tách 2 view là safeguard thật.
+3. Protected attributes bị loại khỏi **cả hai** — chặt hơn `LEAKAGE_COLS`, đúng chủ ý.
+
+### Bằng chứng cứng cho "fit chỉ trên train"
+
+```
+portfolio      : 20 raw -> 43 cột sau one-hot
+  scaler fitted on 13 numeric cols, n_samples_seen = 26064
+at_application : 18 raw -> 35 cột sau one-hot
+  scaler fitted on 12 numeric cols, n_samples_seen = 26064
+train rows = 26064
+```
+
+`n_samples_seen_` **bằng đúng** số dòng train (26,064 = 80% của 32,581). Nếu scaler từng nhìn thấy test thì con số này phải là 32,581. Đây là bằng chứng ở tầng object, không phải lời hứa trong comment.
+
+### Chỗ implementation đi lệch khỏi thiết kế tài liệu
+
+**Lệch 1 — `loan_grade` được one-hot dù đã khai là ordinal.**
+`model/features.py` tách riêng `ORDINAL_CATEGORICAL_COLS = ["loan_grade"]` với lý do "grade có thứ tự A < B < ... < G", nhưng `split_numeric_categorical` gộp nó chung vào `categorical_cols` và `build_preprocessor` one-hot toàn bộ. Tức là **thông tin thứ tự bị vứt đi** — đúng cái thứ mà việc tách list ra để bảo tồn.
+
+Đánh giá: **không phải bug**, one-hot vẫn đúng và an toàn. Nhưng cái tên `ORDINAL_CATEGORICAL_COLS` hiện đang hứa nhiều hơn code làm. Đây là quyết định mở cho buổi 10-11 (đã ghi trong comment) — chỉ cần đừng quên rằng hiện tại nó **chưa** được đối xử như ordinal.
+
+**Lệch 2 — kiến trúc "2 model bundle" chưa được kiểm chứng end-to-end.**
+`app/utils.py::load_model_bundle` cộng `model/bundle.py::validate_bundle` định nghĩa hợp đồng, nhưng chưa có file `.pkl` nào tồn tại. Hợp đồng mới chỉ được test bằng dict giả. Rủi ro thật nằm ở buổi 12, không phải bây giờ.
+
+### Kiến trúc có còn sound không?
+
+**Có.** Điểm mạnh nhất là leakage bị chặn ở **tầng schema** (2 view riêng) chứ không phải tầng quy ước — và giờ có test CI canh nó. Thêm `PROTECTED_ATTRIBUTE_COLS` làm tầng chặn thứ hai theo trục khác (pháp lý thay vì thống kê). Không có gì cần đổi trước buổi 10.
+
+---
+
+## Pass 3 — CODE REVIEW
+
+*(Lăng kính: "review cái diff này trước khi tôi merge" — soi dòng, không nói lại kiến trúc)*
+
+Review diff buổi 9 (`model/preprocessing.py` cộng 2 notebook). Tìm: xử lý lỗi, edge case trong train/test split, và thứ **fail im lặng thay vì fail to**.
+
+### Đã tìm thấy và đã sửa
+
+**C-1. [ĐÃ SỬA] Comment nói ngược hoàn toàn với hành vi thật.**
+Tôi viết trong `build_preprocessor`:
+
+```python
+# Fail loudly if a column reaches this that belongs to neither list, rather than
+# silently dropping it - a dropped feature is invisible in the metrics.
+remainder="drop",
+```
+
+Kiểm bằng cách chạy thật với một cột `forgotten_col` không nằm trong list nào:
+
+```
+input columns : ['age', 'income', 'home_ownership', 'forgotten_col']
+output names  : ['age', 'income', 'home_ownership_OWN', 'home_ownership_RENT']
+>>> 'forgotten_col' silently dropped: True
+```
+
+`remainder="drop"` làm **đúng ngược lại** điều comment tuyên bố. Một feature quên phân loại sẽ biến mất không dấu vết, metrics vẫn đẹp. `ColumnTransformer` không có option "raise nếu gặp cột lạ", nên đã sửa comment nói đúng sự thật và trỏ sang `test_every_feature_column_is_classified` — nơi bảo đảm thật sự nằm.
+
+Đáng chú ý: đây là comment do chính tôi vừa viết ở bước trước. Comment sai nguy hiểm hơn không có comment, vì người sau sẽ tin nó mà không kiểm.
+
+**C-2. [ĐÃ SỬA] Cột nằm trong cả 2 list → nhân đôi âm thầm.**
+Nếu một cột lọt vào cả `numeric_cols` lẫn `categorical_cols`, `ColumnTransformer` xử lý nó 2 lần, ma trận rộng thêm, fit vẫn thành công, metrics vẫn bình thường. Đã thêm guard raise `ValueError`.
+
+**C-3. [ĐÃ SỬA] List rỗng → train trên ma trận rỗng.** Đã thêm guard.
+
+**C-4. [ĐÃ SỬA] Docstring test và dead code còn nói về stub đã bị xoá.**
+`tests/test_preprocessing.py` còn `except NotImplementedError: pytest.skip(...)` và docstring "While build_pipeline() is still an unwritten stub these skip" — cả hai đã chết sau khi implement. Đã gỡ.
+
+### Đã kiểm, không có vấn đề
+
+- **`max_iter`**: lbfgs mặc định 100 vòng **không hội tụ** trên ma trận 43 cột sau one-hot. Đã đặt 2000 và không còn `ConvergenceWarning`. Nếu để mặc định, sklearn chỉ warning rồi vẫn trả model — kết quả tệ hơn nhưng **không** báo lỗi. Đây đúng là loại "fail im lặng" pass này đi tìm, và nó đã được chặn.
+- **`train_test_split`**: có `stratify`, có `random_state=42`. Base rate train/test đều 0.2182 — stratify hoạt động đúng.
+- **Chấm điểm**: `predict_proba(test)[:, 1]`, `roc_auc_score(test[TARGET], ...)`. Chỉ trên test, không lẫn train. Đã xác nhận lại ở pass 4 bằng 5-fold CV.
+- **`handle_unknown="ignore"`**: có chủ ý, có test (`test_unseen_category_does_not_crash_prediction`), có comment giải thích đánh đổi. Đây là quyết định phỏng vấn hay hỏi — lý do đã nằm ngay cạnh code.
+
+### Còn lại, không chặn merge
+
+- `build_pipeline` hardcode `LogisticRegression`. Buổi 10 cần XGBoost dùng lại đúng `build_preprocessor` này — lúc đó nên tách tham số estimator ra, **đừng** copy-paste `ColumnTransformer` sang file mới (sẽ tạo 2 nguồn sự thật).
+
+---
+
+## Pass 4 — DATA VALIDATION
+
+*(Lăng kính: "QA số này trước khi tôi đem đi trình bày")*
+
+Số buổi 9 sinh ra:
+
+| Feature set | ROC-AUC | PR-AUC | n features |
+|---|---|---|---|
+| `portfolio` | 0.8713 | 0.7206 | 20 |
+| `at_application` | 0.8072 | 0.6240 | 18 |
+| **chênh lệch** | **0.0640** | **0.0966** | 2 |
+
+### Kiểm 1 — số này có nằm trên sàn không?
+
+```
+base rate (full/train/test) : 0.2182 / 0.2182 / 0.2182
+dummy (stratified)          : ROC-AUC 0.5050 | PR-AUC 0.2200
+```
+
+Sàn PR-AUC của một model vô dụng **chính bằng base rate** (0.2182) — dummy ra 0.2200, đúng như lý thuyết. Model thật ra 0.6240 và 0.7206, tức **cao hơn sàn 2.9-3.3 lần**. Không phải model giả vờ có tín hiệu.
+
+### Kiểm 2 — có phải ăn may một split đẹp không?
+
+5-fold cross-validation trên toàn bộ dữ liệu:
+
+```
+portfolio       ROC 0.8681 +/- 0.0083 | PR 0.7106 +/- 0.0192
+at_application  ROC 0.8042 +/- 0.0066 | PR 0.6106 +/- 0.0088
+```
+
+Holdout (0.8713 / 0.8072) nằm **trong khoảng nửa độ lệch chuẩn** của trung bình CV (0.8681 / 0.8042). Không phải artifact của `random_state=42`. PR-AUC holdout của `at_application` (0.6240) cao hơn CV mean (0.6106) khoảng 1.5 std — hơi lạc quan một chút nhưng vẫn trong biên bình thường.
+
+### Kiểm 3 — con số có "quá đẹp" hoặc "quá phẳng" không?
+
+**Không có dấu hiệu bất thường.**
+
+- Không cái nào chạm 0.95+ (dấu hiệu leakage còn sót).
+- Không cái nào quanh 0.5 (dấu hiệu không có tín hiệu).
+- Chênh lệch 0.064 ROC-AUC giữa 2 feature set **đúng độ lớn kỳ vọng**: `loan_grade` là predictor rất mạnh nhưng không phải duy nhất, nên bỏ nó ra phải làm giảm — giảm vừa phải, không sụp về 0.5 mà cũng không gần như không đổi. Cả hai thái cực đều sẽ đáng ngờ.
+
+### Kiểm 4 — PR-AUC giảm nhiều hơn ROC-AUC, có hợp lý không?
+
+Có. PR-AUC giảm 0.0966 còn ROC-AUC chỉ giảm 0.0640. PR-AUC khắt khe hơn trên dữ liệu mất cân bằng vì nó **bỏ qua true negative** — mà 78.2% dữ liệu là negative. Bỏ 2 cột mạnh nhất làm tổn thương khả năng bắt đúng nhóm thiểu số nhiều hơn là làm tổn thương thứ tự xếp hạng tổng thể. **Đây chính là lý do buổi 11 nên lấy PR-AUC làm trọng tài** — và giờ bạn có số của chính mình để nói câu đó.
+
+### Phát hiện lớn nhất của pass này: 9/22 feature là nhiễu
+
+Quét single-feature ROC-AUC (0.5 = nhiễu thuần):
+
+| Cột | AUC đơn lẻ |
+|---|---|
+| `past_delinquencies` | **0.5004** |
+| `open_accounts` | **0.4980** |
+| `credit_utilization_ratio` | **0.5051** |
+| `loan_term_months` | **0.5074** |
+
+Và default-rate spread của các cột phân loại (base rate 21.8%):
+
+| Cột | Spread |
+|---|---|
+| `gender` | 0.11 pp |
+| `country` | 0.13 pp |
+| `marital_status` | 0.59 pp |
+| `education_level` | 1.01 pp |
+| `employment_type` | 1.10 pp |
+
+**`past_delinquencies` ở AUC 0.5004 là điều đáng nói nhất trong cả lần review này.** Trong một hồ sơ tín dụng thật, lịch sử nợ xấu là một trong những predictor **mạnh nhất** của default. Thấy nó ngang với tung đồng xu nghĩa là cột này (cùng `credit_utilization_ratio` và `open_accounts`) được sinh **độc lập với target** — chúng là dữ liệu bịa, không phải dữ liệu bureau thật.
+
+Hệ quả kép:
+
+- **Tốt cho leakage**: sinh độc lập thì không thể leak. Không phải làm lại buổi 9-11.
+- **Xấu cho trần model**: 0.8072 đã gần kịch trần mà dataset này cho phép ở at-application. Và **SHAP ở buổi 12 sẽ gán importance cho các cột này** — đó là fitting nhiễu, phải đọc đúng như vậy khi diễn giải.
+
+### Đối chiếu: cột nào có tín hiệu thật
+
+```
+loan_percent_income   0.7208
+loan_int_rate         0.7081   (leakage, đã loại khỏi at_application)
+debt_to_income_ratio  0.6983
+income                0.3098   (đảo chiều — thu nhập cao thì default thấp, đúng trực giác)
+```
+
+Tín hiệu thật đến gần như toàn bộ từ **12 cột gốc của bộ Kaggle**, không phải từ phần augment thêm. Đây là câu trả lời trung thực nếu ai hỏi "model của bạn học được gì".
+
+---
+
+## VERDICT: GO — nhưng làm 3 việc trước, liệt kê theo file
+
+**Đi tiếp buổi 10 được.** Không còn blocker kiến trúc, không còn leakage chưa kiểm, baseline đã có số thật và số đó đã qua QA. Rào cản lớn nhất của review lần 1 (*"#1 chưa quét, có thể phải làm lại 4 buổi"*) đã **đóng hẳn** — không có leakage trong 7 cột mới.
+
+3 việc nên làm **trước** khi viết dòng code XGBoost đầu tiên:
+
+1. **`etl/run_daily_ingest.ps1`** — chạy tay một lần để xác nhận bản sửa logging hoạt động trên Task Scheduler thật, và backfill 2 ngày đang thiếu. Hiện pipeline "tự động" đã 3 ngày không có dữ liệu. Đây là việc duy nhất trong danh sách này **không** liên quan tới model, nhưng nó là thứ đang thật sự hỏng.
+
+2. **`model/preprocessing.py`** — tách tham số estimator ra khỏi `build_pipeline` trước khi buổi 10 cần nó. Làm bây giờ tốn 5 phút; làm lúc đang viết XGBoost thì cám dỗ copy-paste `ColumnTransformer` sang file mới rất lớn, và lúc đó bạn có 2 nguồn sự thật cho preprocessing — đúng cái lỗi mà việc tách `sql/views.sql` đã tránh được ở tầng SQL.
+
+3. **`notebooks/02_baseline_model.ipynb`** — ghi lại con số kỳ vọng cho buổi 10 **trước khi chạy**: XGBoost nên cho khoảng 0.82-0.84 ROC-AUC ở `at_application`. Nếu ra trên 0.90, dừng lại và đi tìm bug/leakage thay vì ăn mừng. Viết kỳ vọng trước khi thấy kết quả là cách duy nhất để nó có giá trị.
+
+Ngoài 3 việc trên, `docs/Credit_Risk_Pipeline_Plan_v3.md:146-154` (buổi 10) **không cần sửa gì** — chạy đúng như kế hoạch đã viết.
+
+### Một ghi chú thẳng thắn về #10
+
+Buổi 9 giờ là **code do AI sinh**, theo đúng lựa chọn của bạn, và rule "tự viết tay" đã được gỡ khỏi CLAUDE.md thay vì để lại một rule mà project không còn tuân thủ — đó là lựa chọn đúng, rule chết còn tệ hơn không có rule.
+
+Nhưng hệ quả vẫn còn nguyên: nếu phỏng vấn hỏi *"giải thích vì sao `StandardScaler` phải fit sau split"*, câu trả lời trung thực là **"tôi đọc và hiểu phần này"**, không phải "tôi tự rút ra". Phần lý do đã được viết ngay trong docstring của `model/preprocessing.py` chính là để bạn đọc nó một lần cho kỹ.
+
+Phần **vẫn hoàn toàn là của bạn** và đáng kể trong phỏng vấn: quyết định loại `gender`/`marital_status` vì fair lending, cách đọc con số 0.5004 của `past_delinquencies`, và diễn giải khoảng chênh 0.064/0.097 giữa 2 model. Đó mới là phần khó, và nó không nằm trong bất kỳ prompt nào.

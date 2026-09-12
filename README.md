@@ -47,6 +47,26 @@ credit-risk-pipeline/
 └── .env.example
 ```
 
+## Why both the Excel file and the SQL seed are committed
+
+`data/Credit_Risk_Dataset.xlsx` (6.1 MB) and `db-seed/01_seed.sql` (8.8 MB) hold the same
+32,581 records — the seed is just the Excel file after it has been through the ETL. That
+duplication is deliberate, and they answer different questions:
+
+- **The `.xlsx` is the provenance.** It's the untouched input, so the outlier capping,
+  imputation and normalisation in `etl/historical_load.py` can be re-run and audited
+  against their real source. Without it the ETL is unverifiable and the "differences from
+  the original plan" table above is unreproducible.
+- **The seed is the convenience.** `docker compose up -d` restores a working database —
+  schema, data and both views — in seconds, so nobody has to install Python and run the
+  ETL just to look at the project.
+
+**The cost**: `scripts/dump_db.sh` rewrites the whole 8.8 MB seed each time, and git keeps
+every version forever, so each refresh permanently adds several MB to the repo. Refresh
+the seed only when the *data* actually changes, not as a routine step. If the repo ever
+grows unreasonable, the seed is the one to drop — the `.xlsx` plus the ETL can always
+regenerate it, but nothing can regenerate the `.xlsx`.
+
 ## Running from scratch
 
 Fastest path — restore the committed snapshot instead of re-running the ETL:

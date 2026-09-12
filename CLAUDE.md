@@ -17,10 +17,10 @@ etl/       historical_load.py, daily_ingest.py, config.py (DB connection),
 data/      Credit_Risk_Dataset.xlsx — committed to the repo (not gitignored)
 notebooks/ 01_eda.ipynb, 02_baseline_model.ipynb (session 9+), figures/ (PNGs exported
            for the README, via kaleido)
-model/     features.py (column bookkeeping: ID/target/leakage cols, categorical list),
-           preprocessing.py (ColumnTransformer + Pipeline — written by hand in session 9,
-           not AI-generated; see docs/Credit_Risk_Pipeline_Plan_v3.md buổi 9). Reused
-           as-is by sessions 10-12, saved as `preprocessor` in the session 12 bundle.
+model/     features.py (column bookkeeping: ID/target/leakage/protected-attribute cols,
+           categorical lists), preprocessing.py (ColumnTransformer + Pipeline, reused
+           as-is by sessions 10-12 and saved as `preprocessor` in the session 12 bundle),
+           bundle.py (validates the model-bundle contract app/utils.py depends on)
 models/    *.pkl joblib bundles — gitignored, not committed
 app/       app.py (Streamlit, 2 tabs), utils.py
 tests/     pytest — etl/ function tests, model/ column-split + preprocessing-discipline
@@ -59,6 +59,8 @@ streamlit run app/app.py
 
 **Never add `loan_grade` or `loan_int_rate` to the at-application feature set** (ETL output used by the model, notebooks, `app.py`'s prediction tab). Verified on the real data: grade is a near-total predictor of default, and `loan_int_rate` is near-deterministic given grade (numbers in `docs/MEMORY.md`). Both are outputs of an underwriting step that happens *after* the decision this model exists to make — including them is leakage that inflates AUC and produces a model nobody can actually run at application time. They're fine in `portfolio_risk_model.pkl`, a separate, explicitly-labeled model for analyzing the existing book.
 
+**Never feed `gender` or `marital_status` to any model — including the portfolio one.** They're protected attributes in consumer-credit decisions (US ECOA / Regulation B, with equivalents in Canada and the UK — all three countries appear in this dataset), so using them as input is a compliance problem regardless of predictive value. `model/features.py::PROTECTED_ATTRIBUTE_COLS` drops them from **both** feature sets, unlike `LEAKAGE_COLS` which only affects at-application. Session 8's scan makes this free: both are statistically noise against the ~21.8% base rate (numbers in `docs/MEMORY.md`), so excluding them costs no accuracy. `country` is deliberately kept — geography is legitimate portfolio segmentation and the session 15-16 dashboard uses it.
+
 **Training code queries `ml_features`, never `dashboard_aggregates`.** `sql/views.sql` splits these into two separate Postgres views specifically so this isn't just a comment to remember — `dashboard_aggregates` (session 15-16 Streamlit only) adds three window-function columns (`avg_loan_amnt_by_age_bucket`, `default_rate_by_grade`, `util_rank_in_country`) on top of `ml_features`. `default_rate_by_grade` is literally `AVG(loan_status)` — the target itself — computed over the whole historical table before any train/test split; using it as a feature is a worse leak than `loan_grade` alone. The other two are computed over the full population too (not per-fold), so they leak test-set distribution into training. The view split is the primary safeguard; this line is a reminder, not the only one.
 
 **Never train on `data_source = 'synthetic_daily'` rows.** Those rows have `loan_status = NULL` (pending prediction) or a distribution-sampled label — not a real outcome either way. `ml_features` (in `sql/views.sql`) filters `WHERE data_source = 'historical'`; carry that filter into any new query against `loans`.
@@ -73,7 +75,7 @@ streamlit run app/app.py
 
 **The schema has 4 tables**: `cities`, `customers`, `credit_bureau`, `loans`. This has been mis-stated as "5 bảng" twice now — once in the original v1 draft (had a separate `locations` table), and again when v3 of the plan was drafted from scratch in a different chat that didn't know about the v2 fix. If the plan doc gets regenerated or edited externally again, re-check this number before trusting it.
 
-**Session 9+ preprocessing must use `sklearn.pipeline.Pipeline` + `ColumnTransformer`, fit only on the train split — this is a requirement to implement, not a description of finished code (see the stub note at the end of this bullet).** `OneHotEncoder` for nominal categoricals (`model/features.py::NOMINAL_CATEGORICAL_COLS`) — not `LabelEncoder`, which imposes a false ordinal relationship a linear model can misread. `StandardScaler` for numeric columns, inside the same `ColumnTransformer`, fit via `Pipeline.fit(X_train, ...)` *after* `train_test_split` — fitting on the full dataset first leaks test-set statistics into training. `model/preprocessing.py::build_preprocessor`/`build_pipeline` are left as `NotImplementedError` stubs on purpose — write them by hand (see that file's docstring), don't generate them wholesale; it's reused as-is for session 10-11 (XGBoost) and saved as `preprocessor` in the session 12 model bundle.
+**Session 9+ preprocessing goes through `model/preprocessing.py::build_pipeline`, never hand-rolled per notebook.** `StandardScaler` for numerics and `OneHotEncoder` (not `LabelEncoder` — it implies order and distance a linear model will misread) for categoricals, both inside one `ColumnTransformer`, so `Pipeline.fit(X_train, ...)` after `train_test_split` is the only thing that ever fits them. Fitting on the full dataset first leaks test-set statistics into training and leaves no trace in the fitted object — `tests/test_preprocessing.py::test_notebook_does_not_fit_before_train_test_split` guards the ordering at notebook-source level, because a pipeline-level assertion provably cannot catch it (`ColumnTransformer.fit` clones and re-fits its transformers, discarding any pre-fitted state). Sessions 10-11 reuse this pipeline and swap only the final estimator; session 12 saves the fitted `ColumnTransformer` as `preprocessor` in the model bundle. `OneHotEncoder` uses `handle_unknown="ignore"` so the session 13 form can't crash the app on a category absent from training data — see the rationale comment in the file before changing it.
 
 ## Conventions
 

@@ -1,32 +1,88 @@
-"""Session 9: build the ColumnTransformer + Pipeline yourself.
+"""ColumnTransformer + Pipeline used by sessions 9-12.
 
-Per docs/Credit_Risk_Pipeline_Plan_v3.md (buổi 9): write build_preprocessor() and
-build_pipeline() by hand - don't have Claude Code generate this part. The goal is
-being able to explain every choice in an interview, not just having working code.
+Reused unchanged by sessions 10-11 (XGBoost swaps only the final estimator) and saved as
+`preprocessor` in the session 12 bundle, so app.py can replay the exact training-time
+transform on new input.
 
-Before writing, answer these two questions in your own words (in the notebook markdown
-cell above where this module gets imported, or as a comment here):
+The two decisions worth being able to defend:
 
-1. Why must StandardScaler live *inside* the Pipeline and fit only on X_train (after
-   train_test_split), not on the full dataset before splitting?
+1. **StandardScaler lives inside the Pipeline, not before the split.** `Pipeline.fit`
+   only ever sees X_train, so the scaler learns its mean/std from training rows alone.
+   Scaling the full frame first and splitting afterwards would let test-set statistics
+   into those parameters - the model's evaluation then flatters itself, and nothing in
+   the fitted object shows it happened. Enforced by
+   tests/test_preprocessing.py::test_notebook_does_not_fit_before_train_test_split.
 
-2. Why OneHotEncoder instead of LabelEncoder for the columns in
-   model.features.NOMINAL_CATEGORICAL_COLS? What would LabelEncoder wrongly imply to a
-   Logistic Regression model that OneHotEncoder doesn't?
+2. **OneHotEncoder, not LabelEncoder, for nominal categoricals.** LabelEncoder maps
+   categories to 0,1,2..., which a linear model reads as order and distance - it would
+   infer RENT < OWN < MORTGAGE and that the RENT-to-MORTGAGE gap is twice the RENT-to-OWN
+   gap. Neither is true. One-hot gives each category an independent column and imposes no
+   ordering. (loan_grade is the deliberate exception: it IS ordinal, A < B < ... < G. It's
+   listed in ORDINAL_CATEGORICAL_COLS and currently still one-hot encoded - switching it
+   to an OrdinalEncoder is an open session 10-11 decision.)
 """
 
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 def build_preprocessor(numeric_cols: list[str], categorical_cols: list[str]) -> ColumnTransformer:
-    """Return a ColumnTransformer: StandardScaler on numeric_cols, OneHotEncoder on
-    categorical_cols."""
-    raise NotImplementedError("Write this yourself - see the module docstring.")
+    """StandardScaler on numeric_cols, OneHotEncoder on categorical_cols."""
+    # A column listed twice is transformed twice and silently duplicated in the output
+    # matrix - the fit still succeeds and the metrics still look reasonable, so nothing
+    # surfaces it. Cheap to rule out here.
+    overlap = sorted(set(numeric_cols) & set(categorical_cols))
+    if overlap:
+        raise ValueError(f"columns listed as both numeric and categorical: {overlap}")
+    if not numeric_cols and not categorical_cols:
+        raise ValueError("no columns given - the pipeline would train on an empty matrix")
+
+    return ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), numeric_cols),
+            # handle_unknown="ignore": the session 13 Streamlit form can submit a category
+            # absent from training data (a new loan_intent, say). Raising there would take
+            # the app down on valid user input; encoding it as all-zeros degrades that one
+            # prediction instead. The tradeoff is that genuinely bad input is scored
+            # silently rather than rejected - acceptable here because every categorical
+            # field in the form is a closed dropdown, so unknown values mean the training
+            # data aged, not that the user typed nonsense.
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols),
+        ],
+        # NOTE: "drop" means a column present in the input but absent from both lists is
+        # discarded with no warning - a feature you forgot to classify simply disappears
+        # and the metrics still look healthy. ColumnTransformer has no "raise on
+        # unlisted" option, so the actual guarantee comes from
+        # tests/test_features.py::test_every_feature_column_is_classified, which asserts
+        # split_numeric_categorical covers the whole feature set. Don't rely on this line
+        # to catch that mistake.
+        remainder="drop",
+        verbose_feature_names_out=False,
+    )
 
 
 def build_pipeline(numeric_cols: list[str], categorical_cols: list[str]) -> Pipeline:
-    """Wrap build_preprocessor(...) and a LogisticRegression(class_weight='balanced')
-    into one Pipeline, so preprocessing is always fit exactly once, on train data only."""
-    raise NotImplementedError("Write this yourself - see the module docstring.")
+    """Preprocessing + Logistic Regression baseline as one estimator, so preprocessing is
+    fit exactly once, on training data only."""
+    return Pipeline(
+        steps=[
+            ("preprocessor", build_preprocessor(numeric_cols, categorical_cols)),
+            (
+                "classifier",
+                LogisticRegression(
+                    # ~21.8% positives: without rebalancing, predicting "no default" for
+                    # everyone already scores 78% accuracy, and the model has little
+                    # gradient pressure to find defaulters. class_weight rescales the loss
+                    # rather than resampling, so no synthetic rows enter the training set
+                    # (SMOTE is evaluated separately in session 11).
+                    class_weight="balanced",
+                    # lbfgs defaults to 100 iterations and does not converge on this
+                    # feature matrix once one-hot expands it.
+                    max_iter=2000,
+                    random_state=42,
+                ),
+            ),
+        ]
+    )

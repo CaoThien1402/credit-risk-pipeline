@@ -4,9 +4,6 @@ The failure this exists to catch: fitting the preprocessor on the full dataset b
 train_test_split. That leaks test-set statistics into training and inflates the metrics,
 and it leaves no trace at runtime - the code still runs, the numbers just get better for
 the wrong reason.
-
-While build_pipeline() is still an unwritten stub these skip. They activate on their own
-once it's implemented.
 """
 import os
 import sys
@@ -55,11 +52,8 @@ def _find_fitted_scaler(estimator):
     return None
 
 
-def _build_or_skip():
-    try:
-        return build_pipeline(NUMERIC_COLS, CATEGORICAL_COLS)
-    except NotImplementedError:
-        pytest.skip("build_pipeline() is still a stub - implement it (session 9 exercise)")
+def _build():
+    return build_pipeline(NUMERIC_COLS, CATEGORICAL_COLS)
 
 
 def test_scaler_is_inside_the_pipeline_and_learns_train_statistics():
@@ -72,7 +66,7 @@ def test_scaler_is_inside_the_pipeline_and_learns_train_statistics():
     test_notebook_does_not_fit_before_train_test_split instead.
     """
     train, _ = _synthetic_split()
-    pipeline = _build_or_skip()
+    pipeline = _build()
     pipeline.fit(train[NUMERIC_COLS + CATEGORICAL_COLS], train["loan_status"])
 
     scaler = _find_fitted_scaler(pipeline)
@@ -88,7 +82,7 @@ def test_scaler_is_inside_the_pipeline_and_learns_train_statistics():
 def test_pipeline_does_not_refit_on_transform():
     """predict on unseen data must not update the fitted statistics."""
     train, test = _synthetic_split()
-    pipeline = _build_or_skip()
+    pipeline = _build()
     pipeline.fit(train[NUMERIC_COLS + CATEGORICAL_COLS], train["loan_status"])
 
     before = _find_fitted_scaler(pipeline).mean_.copy()
@@ -102,7 +96,7 @@ def test_unseen_category_does_not_crash_prediction():
     """A new-application form can submit a category absent from the training data;
     OneHotEncoder must be configured to tolerate it rather than raise."""
     train, _ = _synthetic_split()
-    pipeline = _build_or_skip()
+    pipeline = _build()
     pipeline.fit(train[NUMERIC_COLS + CATEGORICAL_COLS], train["loan_status"])
 
     unseen = pd.DataFrame({"age": [33], "income": [65_000.0], "home_ownership": ["OTHER"]})
@@ -154,3 +148,17 @@ def test_notebook_does_not_fit_before_train_test_split():
         "fit()/fit_transform() called before train_test_split - this leaks test-set "
         f"statistics into training: {premature}"
     )
+
+
+def test_column_in_both_lists_is_rejected():
+    """A duplicated column is transformed twice and silently widens the matrix - the fit
+    succeeds and the metrics look normal, so nothing surfaces it."""
+    from model.preprocessing import build_preprocessor
+    with pytest.raises(ValueError, match="both numeric and categorical"):
+        build_preprocessor(["age", "income"], ["income"])
+
+
+def test_empty_column_lists_are_rejected():
+    from model.preprocessing import build_preprocessor
+    with pytest.raises(ValueError, match="no columns given"):
+        build_preprocessor([], [])
