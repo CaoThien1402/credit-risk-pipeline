@@ -31,19 +31,19 @@ credit-risk-pipeline/
 │   └── 02_baseline_model.ipynb  # session 9: baseline Logistic Regression, 2 feature sets
 ├── model/
 │   ├── features.py              # column bookkeeping (id/target/leakage/categorical)
-│   └── preprocessing.py         # ColumnTransformer + Pipeline, written by hand
+│   ├── preprocessing.py         # ColumnTransformer + Pipeline, written by hand
+│   └── bundle.py                 # validates the model-bundle contract app.py depends on
 ├── models/                      # model bundles (.pkl) saved here
 ├── app/
 │   ├── app.py                   # Streamlit, 2 tabs
 │   └── utils.py
-├── tests/
-│   └── test_placeholder.py      # tests for the key ETL functions
+├── tests/                       # pytest — etl/, model/, and SQL structural tests
 ├── scripts/
 │   └── dump_db.sh                # snapshots the running DB into db-seed/
 ├── db-seed/
 │   └── 01_seed.sql                # auto-loaded by Postgres on an empty volume
 ├── docker-compose.yml           # Postgres
-├── requirements.txt
+├── pyproject.toml               # dependencies (uv) — source of truth, no requirements.txt
 └── .env.example
 ```
 
@@ -53,21 +53,24 @@ Fastest path — restore the committed snapshot instead of re-running the ETL:
 
 ```bash
 cp .env.example .env               # set a real password
+uv sync                            # installs from pyproject.toml + uv.lock — the only
+                                    # dependency source in this repo, no requirements.txt
 docker compose up -d               # db-seed/01_seed.sql auto-loads on first init — includes
                                     # schema, data, and the ml_features/dashboard_aggregates views
-jupyter notebook notebooks/01_eda.ipynb
-streamlit run app/app.py
+uv run jupyter notebook notebooks/01_eda.ipynb
+uv run streamlit run app/app.py
 ```
 
 To rebuild that snapshot from the raw dataset instead:
 
 ```bash
 cp .env.example .env
+uv sync
 docker compose up -d
-psql -h localhost -U postgres -d credit_db -f sql/schema.sql
-psql -h localhost -U postgres -d credit_db -f sql/views.sql   # ml_features, dashboard_aggregates
-python etl/historical_load.py
-python etl/daily_ingest.py
+docker exec -i credit-db psql -U postgres -d credit_db -f - < sql/schema.sql
+docker exec -i credit-db psql -U postgres -d credit_db -f - < sql/views.sql   # ml_features, dashboard_aggregates
+uv run python etl/historical_load.py
+uv run python etl/daily_ingest.py
 bash scripts/dump_db.sh             # refreshes db-seed/01_seed.sql
 ```
 

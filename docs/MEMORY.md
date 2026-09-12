@@ -197,6 +197,23 @@ Facts and patterns discovered while working on this repo. Append here when somet
   live DB/pytest/notebook run — now stated as an explicit rule instead of only
   demonstrated ad hoc).
 
+## 2026-09-12 — fixed CLAUDE.md's own documented psql command (it was broken)
+
+- `CLAUDE.md`'s Commands section documented `docker exec -i credit-db psql -U postgres
+  -d credit_db -f sql/schema.sql` for rebuilding from scratch. Verified directly:
+  `psql: error: sql/schema.sql: No such file or directory`. `-f <path>` with `docker
+  exec` looks for that path **inside the container**, which only has `./db-seed`
+  mounted (`docker-compose.yml`) — the repo's own `sql/` directory was never visible
+  there. README.md had copied the same broken form.
+- Fixed both to `-f - < sql/schema.sql` (reads from stdin, which the host-side `<`
+  redirect actually supplies) and verified it applies cleanly against the live DB.
+  `.github/workflows/ci.yml`'s own apply step is unaffected — it runs `psql` directly
+  on the runner (no `docker exec`), where the plain path form is correct as-is; the two
+  contexts need different syntax and CLAUDE.md now says so.
+- This had apparently never been run as written since it was first documented — a
+  reminder that a command sitting in a doc file is a claim, not a fact, until it's
+  actually executed.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.
