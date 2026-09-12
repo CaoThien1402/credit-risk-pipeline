@@ -17,10 +17,10 @@ etl/       historical_load.py, daily_ingest.py, config.py (DB connection),
 data/      Credit_Risk_Dataset.xlsx — committed to the repo (not gitignored)
 notebooks/ 01_eda.ipynb, 02_baseline_model.ipynb (session 9+), figures/ (PNGs exported
            for the README, via kaleido)
-model/     features.py (column bookkeeping: ID/target/leakage cols, categorical list),
-           preprocessing.py (ColumnTransformer + Pipeline — written by hand in session 9,
-           not AI-generated; see docs/Credit_Risk_Pipeline_Plan_v3.md buổi 9). Reused
-           as-is by sessions 10-12, saved as `preprocessor` in the session 12 bundle.
+model/     features.py (column bookkeeping: ID/target/leakage/protected-attribute cols,
+           categorical lists), preprocessing.py (ColumnTransformer + Pipeline, reused
+           as-is by sessions 10-12 and saved as `preprocessor` in the session 12 bundle),
+           bundle.py (validates the model-bundle contract app/utils.py depends on)
 models/    *.pkl joblib bundles — gitignored, not committed
 app/       app.py (Streamlit, 2 tabs), utils.py
 tests/     pytest — etl/ function tests, model/ column-split + preprocessing-discipline
@@ -75,7 +75,7 @@ streamlit run app/app.py
 
 **The schema has 4 tables**: `cities`, `customers`, `credit_bureau`, `loans`. This has been mis-stated as "5 bảng" twice now — once in the original v1 draft (had a separate `locations` table), and again when v3 of the plan was drafted from scratch in a different chat that didn't know about the v2 fix. If the plan doc gets regenerated or edited externally again, re-check this number before trusting it.
 
-**Session 9+ preprocessing must use `sklearn.pipeline.Pipeline` + `ColumnTransformer`, fit only on the train split — this is a requirement to implement, not a description of finished code (see the stub note at the end of this bullet).** `OneHotEncoder` for nominal categoricals (`model/features.py::NOMINAL_CATEGORICAL_COLS`) — not `LabelEncoder`, which imposes a false ordinal relationship a linear model can misread. `StandardScaler` for numeric columns, inside the same `ColumnTransformer`, fit via `Pipeline.fit(X_train, ...)` *after* `train_test_split` — fitting on the full dataset first leaks test-set statistics into training. `model/preprocessing.py::build_preprocessor`/`build_pipeline` are left as `NotImplementedError` stubs on purpose — write them by hand (see that file's docstring), don't generate them wholesale; it's reused as-is for session 10-11 (XGBoost) and saved as `preprocessor` in the session 12 model bundle.
+**Session 9+ preprocessing goes through `model/preprocessing.py::build_pipeline`, never hand-rolled per notebook.** `StandardScaler` for numerics and `OneHotEncoder` (not `LabelEncoder` — it implies order and distance a linear model will misread) for categoricals, both inside one `ColumnTransformer`, so `Pipeline.fit(X_train, ...)` after `train_test_split` is the only thing that ever fits them. Fitting on the full dataset first leaks test-set statistics into training and leaves no trace in the fitted object — `tests/test_preprocessing.py::test_notebook_does_not_fit_before_train_test_split` guards the ordering at notebook-source level, because a pipeline-level assertion provably cannot catch it (`ColumnTransformer.fit` clones and re-fits its transformers, discarding any pre-fitted state). Sessions 10-11 reuse this pipeline and swap only the final estimator; session 12 saves the fitted `ColumnTransformer` as `preprocessor` in the model bundle. `OneHotEncoder` uses `handle_unknown="ignore"` so the session 13 form can't crash the app on a category absent from training data — see the rationale comment in the file before changing it.
 
 ## Conventions
 
