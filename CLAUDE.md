@@ -37,8 +37,15 @@ db-seed/   01_seed.sql — mounted at /docker-entrypoint-initdb.d, Postgres auto
 ```bash
 docker compose up -d             # db-seed/01_seed.sql auto-loads on an empty volume —
                                   # no need to re-run the ETL just to get data back
-docker exec -i credit-db psql -U postgres -d credit_db -f sql/schema.sql   # only needed if rebuilding from scratch (empty db-seed/)
-docker exec -i credit-db psql -U postgres -d credit_db -f sql/views.sql    # ditto — views, re-run only if their definitions change
+docker exec -i credit-db psql -U postgres -d credit_db -f - < sql/schema.sql   # only needed if rebuilding from scratch (empty db-seed/)
+docker exec -i credit-db psql -U postgres -d credit_db -f - < sql/views.sql    # ditto — views, re-run only if their definitions change
+# Note the `-f - < file` form: `-f sql/schema.sql` alone looks for that path INSIDE the
+# container via `docker exec`, which only has ./db-seed mounted (see docker-compose.yml)
+# — it 404s. `-f -` reads from stdin, which the host-side `< file` redirect supplies.
+# Verified 2026-09-12: `docker exec -i credit-db psql ... -f sql/schema.sql` fails with
+# "No such file or directory". (CI runs psql directly on the runner, not via docker exec,
+# so sql/schema.sql is a real path there and `-f sql/schema.sql` works as-is — the -f -
+# form is specifically for the docker exec case.)
 python etl/historical_load.py    # run from repo root — SOURCE_FILE is cwd-relative
 python etl/daily_ingest.py       # run from repo root
 bash scripts/dump_db.sh          # refresh db-seed/01_seed.sql after changing the data
