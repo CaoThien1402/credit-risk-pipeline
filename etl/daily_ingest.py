@@ -97,10 +97,21 @@ def upsert_loans(df: pd.DataFrame) -> None:
         conn.execute(stmt, df.to_dict(orient="records"))
 
 
+def build_daily_batch(reference_stats: pd.DataFrame, seed: int | None = None) -> tuple[int, pd.DataFrame]:
+    """Pick today's batch size and sample it, both driven by one seed. Returns the seed
+    actually used (generated fresh if not given) so the caller can log it - a run can
+    then be reproduced later via sample_new_applications(n, reference_stats, seed=...)
+    against the same reference_stats."""
+    if seed is None:
+        seed = int(np.random.default_rng().integers(0, 2**32 - 1))
+    rng = np.random.default_rng(seed)
+    n = int(rng.integers(50, 101))
+    return seed, sample_new_applications(n, reference_stats, seed=seed)
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     reference_stats = load_reference_stats()
-    n = int(np.random.randint(50, 101))
-    new_apps = sample_new_applications(n, reference_stats)
+    seed, new_apps = build_daily_batch(reference_stats)
     upsert_loans(new_apps)
-    print(f"Upserted {len(new_apps)} synthetic applications for {date.today()}.")
+    print(f"Upserted {len(new_apps)} synthetic applications for {date.today()} (seed={seed}).")
