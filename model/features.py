@@ -23,6 +23,14 @@ NOMINAL_CATEGORICAL_COLS = [
     "country",
 ]
 
+# loan_grade is CHAR(1) ('A'..'G') - a category, not a number. It only reaches a feature
+# set in the portfolio case (at_application drops it as leakage), but without listing it
+# here it falls through to numeric_cols and StandardScaler raises
+# "could not convert string to float: 'A'". Kept separate from NOMINAL_CATEGORICAL_COLS
+# because grade is genuinely ordinal (A < B < ... < G); one-hot is the safe default,
+# switching it to an OrdinalEncoder is a modelling decision for session 10-11.
+ORDINAL_CATEGORICAL_COLS = ["loan_grade"]
+
 
 def get_feature_columns(columns: list[str], feature_set: str) -> list[str]:
     """Feature columns for 'portfolio' (all) or 'at_application' (leakage cols dropped)."""
@@ -36,6 +44,7 @@ def get_feature_columns(columns: list[str], feature_set: str) -> list[str]:
 
 def split_numeric_categorical(feature_cols: list[str]) -> tuple[list[str], list[str]]:
     """Partition feature_cols into (numeric_cols, categorical_cols) for the ColumnTransformer."""
-    categorical_cols = [c for c in feature_cols if c in NOMINAL_CATEGORICAL_COLS]
+    known_categorical = NOMINAL_CATEGORICAL_COLS + ORDINAL_CATEGORICAL_COLS
+    categorical_cols = [c for c in feature_cols if c in known_categorical]
     numeric_cols = [c for c in feature_cols if c not in categorical_cols]
     return numeric_cols, categorical_cols
