@@ -4,7 +4,7 @@
 **Phạm vi**: toàn repo tại commit `bca5693`, đối chiếu với `docs/Credit_Risk_Pipeline_Plan_v3.md` buổi 1-9.
 **Nguyên tắc**: chỗ nào tài liệu và code mâu thuẫn thì **code đúng, tài liệu phải sửa**. Mọi nhận định dưới đây đều dẫn file:line hoặc output lệnh thật.
 
-**Giới hạn của lần review này**: Docker Desktop không chạy tại thời điểm review (`docker ps` → `cannot find the file specified`), nên không query được DB sống. Mọi kiểm chứng dưới đây đều làm bằng đường khác: đọc source, chạy trực tiếp hàm Python, và đọc **output đã lưu** trong notebook đã execute. Chỗ nào cần DB mới xác minh được, tôi ghi rõ là chưa xác minh.
+**Về việc kiểm chứng với DB**: bản review đầu viết khi Docker Desktop đang tắt, nên mọi claim chạm DB đều để trạng thái "chưa xác minh". **Ngày 2026-09-12 đã bật Docker và kiểm lại toàn bộ** — kết quả ở mục "Phụ lục: kiểm chứng trên DB sống" ở cuối file. Tóm tắt: mọi claim về SQL đều đúng, và phát sinh thêm một lỗi vận hành nghiêm trọng (#11) chỉ lộ ra khi query được DB.
 
 ---
 
@@ -123,6 +123,44 @@ raise NotImplementedError("Write this yourself - see the module docstring.")
 Đây không phải lỗi nhỏ về câu chữ: người đọc CLAUDE.md (kể cả agent ở phiên sau) sẽ tin rằng buổi 9 đã xong. Theo nguyên tắc "code thắng", CLAUDE.md phải nói rõ đây là **yêu cầu chưa được thực hiện**, không phải mô tả hiện trạng. Câu cuối của đoạn đó có nhắc stub, nhưng phần đầu vẫn đọc như đã implement.
 
 **Nói thẳng: buổi 9 chưa hoàn thành.** Repo mới có scaffold của buổi 9.
+
+### #11 — [NGHIÊM TRỌNG] Pipeline "tự động hằng ngày" đã hỏng 2/3 ngày gần nhất, và log tự xoá bằng chứng
+
+*(Phát hiện bổ sung ngày 2026-09-12 sau khi bật Docker — mức nghiêm trọng ngang #1-#3, chỉ đánh số sau vì tìm ra muộn hơn.)*
+
+Buổi 5 kết luận *"pipeline daily ingestion tự động, idempotent thật"*. Query DB sống:
+
+```
+ loan_date  | rows_ingested
+------------+---------------
+ 2026-09-09 |            79
+```
+
+**Đúng một ngày duy nhất có dữ liệu**, trong khi hôm nay đã là 2026-09-12.
+
+`logs/daily_ingest.log` cho thấy Task Scheduler **có bắn đúng giờ** 20:00 các ngày 09-10 và 09-11, nhưng **cả hai lần đều fail**, và log chỉ ghi được đúng một dòng vô dụng:
+
+```
+2026-09-10T20:00:11 - FAILED: python.exe : Traceback (most recent call last):
+    + FullyQualifiedErrorId : NativeCommandError
+```
+
+Nguyên nhân nằm ở `etl/run_daily_ingest.ps1:13` (bản cũ): `& $python $script 2>&1 | Out-String` chạy dưới `$ErrorActionPreference = "Stop"` (dòng 3). Trong PowerShell 5.1, mỗi dòng stderr của một native exe bị bọc thành `ErrorRecord`, nên **dòng đầu tiên** của traceback Python đã throw ngay trước khi pipeline kịp chạy xong — `$output` không bao giờ được gán, và catch block chỉ log đúng `ErrorRecord` đầu tiên đó. Python ghi **mọi** traceback ra stderr, nên lỗi này cắt mất nguyên nhân của **tất cả** các lần fail.
+
+Điểm đáng chú ý: `docs/MEMORY.md` ghi bug này **đã được sửa**. Log chứng minh là chưa — lần sửa trước đổi catch block, nhưng throw xảy ra *trước* khi catch nhìn thấy output đầy đủ. Đây là ví dụ rõ nhất trong cả repo cho nguyên tắc "code thắng tài liệu": tài liệu nói đã sửa, log nói chưa, và log đúng.
+
+Đã sửa ở PR #10 (`Start-Process` + 2 file redirect riêng). Verify bằng cách chạy **cả hai** pattern trên cùng một script lỗi:
+
+| Pattern | Log thu được |
+|---|---|
+| Cũ | `python.exe : Traceback (most recent call last):` + `NativeCommandError` — mất sạch exception |
+| Mới | Traceback đầy đủ, kết thúc bằng `ConnectionError: could not connect to server: Connection refused (is Docker running?)`, exit code 1 |
+
+Bản sửa cũng chữa luôn lỗi mojibake trong log (dòng cũ đọc ra `─É├ú upsert 75 hß╗ô s╞í`).
+
+**Vẫn còn bỏ ngỏ**: vì sao 09-10 và 09-11 fail thì **không còn cách nào biết** — bằng chứng đã bị chính bug logging xoá mất. Khả năng cao nhất là Docker Desktop tắt lúc 20:00 (đúng failure mode mà `CLAUDE.md` đã ghi, và hôm nay Docker cũng đang tắt lúc bắt đầu review). Lần fail tới sẽ nói rõ.
+
+**Bài học rộng hơn cho project**: một pipeline "tự động" không có cảnh báo thì hỏng trong im lặng. Bạn chỉ phát hiện ra vì tình cờ query bảng. Nếu định kể chuyện này trong phỏng vấn ("tôi dựng pipeline ingest tự động hằng ngày"), thì câu hỏi tiếp theo gần như chắc chắn là *"làm sao bạn biết khi nó hỏng?"* — và hiện tại câu trả lời là "không biết".
 
 ### #4 — [TRUNG BÌNH] CI chạy trùng 2 lần mỗi PR, và không có Postgres nên không test được gì chạm DB
 
@@ -262,3 +300,47 @@ Ngược lại, những phần **cứ để agent làm**: plumbing SQL/view, wir
 5. Xong hết mới sang buổi 10.
 
 Buổi 10 sau đó chạy **đúng như kế hoạch** — không có gì trong `plan v3:146-154` cần sửa, miễn là feature set đã được kiểm và baseline đã có thật.
+
+---
+
+## Phụ lục: kiểm chứng trên DB sống (2026-09-12)
+
+Bản review đầu viết khi Docker tắt. Sau khi bật, đã query lại toàn bộ. Kết quả:
+
+### Những claim SQL đều đúng
+
+| Claim | Nguồn | Kết quả kiểm chứng |
+|---|---|---|
+| `ml_features` 25 cột, `dashboard_aggregates` 28 cột | PR #5 | ✅ Đúng chính xác |
+| `ml_features` = 32,581 dòng, 0 dòng `loan_status` NULL | `sql/views.sql:34` | ✅ Đúng |
+| Filter `data_source='historical'` loại synthetic | `CLAUDE.md` | ✅ **Và filter đang làm việc thật**: bảng `loans` có 32,581 historical + **79 synthetic_daily**, view trả về đúng 32,581 |
+| 7 cột thêm ở PR #5 có dữ liệu thật | #1 | ✅ 0 null cả 7 cột; `gender`/`marital_status`/`education_level`/`employment_type` là `str`, `open_accounts`/`loan_term_months` là `int64`, `other_debt` là `float64` |
+| `loan_grade` là chuỗi → crash `StandardScaler` | #2 | ✅ dtype `str`, giá trị `['D','B','C','A','E']` — xác nhận trên view 25 cột hiện tại, không chỉ suy từ notebook cũ |
+| Bản vá PR #8 có hiệu lực | #2 | ✅ Feature set `portfolio` = 13 numeric + 9 categorical, **không cột non-numeric nào** lọt vào `StandardScaler` |
+| `application_ref` là khoá UPSERT thật | `CLAUDE.md` | ✅ Tồn tại constraint `loans_application_ref_key UNIQUE (application_ref)`; `loan_id` chỉ là PK |
+| Dòng synthetic có `loan_status` NULL | `CLAUDE.md` | ✅ 79/79 dòng NULL, 79 `application_ref` phân biệt |
+| `db-seed/01_seed.sql` phục hồi đúng view 25 cột | PR #5 | ✅ Dòng 165-197 của seed chứa đủ 25 cột (kiểm tĩnh, **không** chạy `down -v` vì sẽ xoá mất 79 dòng synthetic đang có) |
+
+### Claim leakage của `dashboard_aggregates` — đúng đến 6 chữ số thập phân
+
+`CLAUDE.md` nói `default_rate_by_grade` *"is literally `AVG(loan_status)` — the target itself"*. Kiểm bằng cách join 2 view rồi so:
+
+```
+ loan_grade | dashboard_col | true_default_rate
+------------+---------------+-------------------
+ A          |      0.099564 |          0.099564
+ D          |      0.590458 |          0.590458
+ G          |      0.984375 |          0.984375
+```
+
+Khớp tuyệt đối. Dùng cột này làm feature nghĩa là đưa thẳng target vào input. Và kiểm tra cấu trúc: query 3 cột dashboard trong `information_schema` với `table_name='ml_features'` trả về **0 dòng** — tức đường training **không có cách nào** chạm tới chúng. Safeguard là thật, không phải comment suông.
+
+### Phát sinh mới
+
+Xem **#11** ở trên — chỉ lộ ra khi query được `loan_date` của các dòng synthetic.
+
+### Vẫn chưa kiểm
+
+- **Phép quét leakage cho 7 cột mới (#1)**: vẫn để bạn tự chạy, có Docker rồi cũng không đổi — đây là bài tập buổi 8, không phải việc thiếu công cụ.
+- **Chạy thật `daily_ingest.py` để backfill**: chưa chạy. Job đã lên lịch sẽ tự bắn lúc 20:00 hôm nay; nếu chạy tay bây giờ thì ngày 2026-09-12 sẽ có 2 batch (mỗi lần sample `client_id` ngẫu nhiên khác nhau → `application_ref` khác nhau → không đè lên nhau). Vô hại vì dòng synthetic bị loại khỏi `ml_features`, nhưng là quyết định của bạn.
+- **`docker compose down -v` để test seed end-to-end**: cố ý không chạy, vì sẽ xoá 79 dòng synthetic — lịch sử pipeline thật đang tích luỹ. Đã kiểm tĩnh nội dung seed thay thế.
