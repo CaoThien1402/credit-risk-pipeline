@@ -182,6 +182,21 @@ Facts and patterns discovered while working on this repo. Append here when somet
   stratified split) runs clean. No ROC-AUC/PR-AUC numbers exist yet; those depend on
   the user's own `build_pipeline()` implementation.
 
+## 2026-09-12 — PR hygiene rules added to CLAUDE.md
+
+- `CLAUDE (1).md` appeared untracked in the repo root — turned out to be the
+  contributor guide for "Superpowers," an unrelated Claude Code skills plugin (PR
+  template, `dev`-branch targeting, skill eval harness, its own branding). Almost none
+  of it applies to a solo portfolio project with no plugin/skill code. Left the file
+  alone (untracked, user's to deal with) rather than deleting it unasked.
+- Extracted 3 genuinely generalizable habits into `CLAUDE.md`'s Git workflow section:
+  disclose AI authorship in commits/PRs (already de facto practice via the
+  `Co-Authored-By` trailer, now made an explicit rule), don't bundle unrelated changes
+  into one PR (already followed once, in PR #6 splitting off from #5), verify before
+  claiming a fix is done (this repo's whole existing pattern of confirming against a
+  live DB/pytest/notebook run — now stated as an explicit rule instead of only
+  demonstrated ad hoc).
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.

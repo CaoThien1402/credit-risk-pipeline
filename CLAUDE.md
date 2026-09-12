@@ -90,6 +90,22 @@ not overhead to skip. Never commit straight to `main`. Concretely:
 CI (`.github/workflows/ci.yml`) runs `pytest` via GitHub Actions on every push and
 on PRs to `main`. A red check is a signal to fix before merging, not to ignore.
 
+**PR hygiene** (adopted 2026-09-12, generalized from an unrelated project's contributor
+guide found in this repo's folder — most of that guide didn't apply here, but these
+three habits do):
+
+- **Disclose AI involvement.** Every commit ends with
+  `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`; every PR description ends
+  with the Claude Code attribution line. Never omit these when Claude Code authored or
+  co-authored the change.
+- **One change per PR.** Don't bundle an unrelated fix into a feature branch just
+  because you noticed it along the way — split it into its own branch/PR (e.g. PR #6
+  split a cosmetic notebook re-save and an unrelated editor-config fix out of PR #5).
+- **Verify before claiming done.** A fix isn't finished when the code is written — run
+  it: a query against the live DB, `pytest`, a notebook re-execution via `nbconvert`.
+  Don't open a PR whose "Test plan" section describes checks that were never actually
+  run.
+
 ## Local machine state (not in git, won't exist after a fresh clone)
 
 - Windows Task Scheduler job `CreditRiskPipeline_DailyIngest` — runs `etl/run_daily_ingest.ps1` daily at 20:00. Only fires while the user is logged into Windows; only succeeds if Docker Desktop is running at the time. Check/edit via `Get-ScheduledTask -TaskName CreditRiskPipeline_DailyIngest` or Task Scheduler GUI.
