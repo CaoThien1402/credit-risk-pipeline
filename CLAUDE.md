@@ -23,7 +23,10 @@ model/     features.py (column bookkeeping: ID/target/leakage cols, categorical 
            as-is by sessions 10-12, saved as `preprocessor` in the session 12 bundle.
 models/    *.pkl joblib bundles — gitignored, not committed
 app/       app.py (Streamlit, 2 tabs), utils.py
-tests/     pytest, mirrors etl/ functions
+tests/     pytest — etl/ function tests, model/ column-split + preprocessing-discipline
+           tests, bundle-contract tests, and SQL structural tests (test_views.py,
+           needs a reachable Postgres — skips otherwise; CI's postgres service and
+           schema.sql/views.sql apply step make it always run there)
 scripts/   dump_db.sh — snapshots the running DB into db-seed/
 db-seed/   01_seed.sql — mounted at /docker-entrypoint-initdb.d, Postgres auto-loads it
            on an empty volume; refresh via scripts/dump_db.sh after changing the data
