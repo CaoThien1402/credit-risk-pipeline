@@ -214,6 +214,33 @@ Facts and patterns discovered while working on this repo. Append here when somet
   reminder that a command sitting in a doc file is a claim, not a fact, until it's
   actually executed.
 
+## 2026-09-12 — buổi 8 leakage scan re-run over the full 22-column feature set
+
+Ran at the user's explicit request (previously withheld as their own exercise — noted
+so the record of who derived what stays honest).
+
+- Rewrote `01_eda.ipynb` cells 10-12 to derive categorical/numeric lists **from dtype**
+  instead of the hardcoded 5-column list, and added a third scan (single-feature ROC-AUC
+  of each numeric column vs the target) — the previous two scans never tested a numeric
+  column against `loan_status` at all, leaving 13 of 22 features unchecked.
+- **No leakage found in the 7 columns added by PR #5.** The worst case (redo sessions
+  9-11) is off the table. `loan_grade` remains the only near-total separator (88.48pp
+  spread), and `loan_grade`→`loan_int_rate` still the lowest variance ratio of all 117
+  pairs (0.3930, next is 0.6240).
+- **9 of 22 features are statistically indistinguishable from noise.** Single-feature
+  AUC: `past_delinquencies` 0.5004, `open_accounts` 0.4980, `credit_utilization_ratio`
+  0.5051, `loan_term_months` 0.5074. Default-rate spread: `gender` 0.11pp, `country`
+  0.13pp, `marital_status` 0.59pp, `education_level` 1.01pp, `employment_type` 1.10pp.
+  The three credit-bureau columns sitting at chance level is the tell — in real bureau
+  data those are among the strongest default predictors, so they were almost certainly
+  generated independently of `loan_status`. Good for leakage, bad for model ceiling, and
+  it means any SHAP importance they attract in session 12 is fitting randomness.
+- Real signal, for contrast: `loan_percent_income` AUC 0.7208, `loan_int_rate` 0.7081,
+  `debt_to_income_ratio` 0.6983, `income` 0.3098 (inverted, as expected).
+- Added `PROTECTED_ATTRIBUTE_COLS = ["gender", "marital_status"]`, excluded from **both**
+  feature sets on fair-lending grounds (ECOA/Reg B), not leakage grounds. Free to do
+  since both are noise. Feature sets went portfolio 22→20, at_application 20→18.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.

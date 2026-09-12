@@ -12,6 +12,16 @@ TARGET_COL = "loan_status"
 # feature set, kept only in the separate portfolio-risk model. See CLAUDE.md.
 LEAKAGE_COLS = ["loan_grade", "loan_int_rate"]
 
+# Protected attributes under consumer-credit fair-lending law (US ECOA / Regulation B,
+# with equivalents in Canada and the UK - the three countries in this dataset). Using
+# them as model input is a compliance problem independent of how well they predict.
+# Excluded from BOTH feature sets, not just at_application: fair-lending exposure doesn't
+# disappear because a model analyses an existing book instead of approving a new loan.
+# Session 8's scan makes this free - both are statistically noise against the ~21.8% base
+# rate (gender 0.11pp default-rate spread, marital_status 0.59pp), so dropping them costs
+# no accuracy. Numbers in docs/MEMORY.md.
+PROTECTED_ATTRIBUTE_COLS = ["gender", "marital_status"]
+
 NOMINAL_CATEGORICAL_COLS = [
     "home_ownership",
     "loan_intent",
@@ -33,13 +43,14 @@ ORDINAL_CATEGORICAL_COLS = ["loan_grade"]
 
 
 def get_feature_columns(columns: list[str], feature_set: str) -> list[str]:
-    """Feature columns for 'portfolio' (all) or 'at_application' (leakage cols dropped)."""
+    """Feature columns for 'portfolio' (keeps leakage cols) or 'at_application' (drops
+    them). Protected attributes are dropped from both."""
     if feature_set not in ("portfolio", "at_application"):
         raise ValueError(f"feature_set must be 'portfolio' or 'at_application', got {feature_set!r}")
-    cols = [c for c in columns if c not in ID_COLS and c != TARGET_COL]
+    excluded = set(ID_COLS) | {TARGET_COL} | set(PROTECTED_ATTRIBUTE_COLS)
     if feature_set == "at_application":
-        cols = [c for c in cols if c not in LEAKAGE_COLS]
-    return cols
+        excluded |= set(LEAKAGE_COLS)
+    return [c for c in columns if c not in excluded]
 
 
 def split_numeric_categorical(feature_cols: list[str]) -> tuple[list[str], list[str]]:

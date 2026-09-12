@@ -16,6 +16,7 @@ from model.features import (
     LEAKAGE_COLS,
     NOMINAL_CATEGORICAL_COLS,
     ORDINAL_CATEGORICAL_COLS,
+    PROTECTED_ATTRIBUTE_COLS,
     TARGET_COL,
     get_feature_columns,
     split_numeric_categorical,
@@ -59,6 +60,16 @@ def test_ids_and_target_never_become_features(feature_set):
     cols = get_feature_columns(ML_FEATURES_COLUMNS, feature_set)
     assert TARGET_COL not in cols
     assert not set(ID_COLS) & set(cols)
+
+
+@pytest.mark.parametrize("feature_set", ["portfolio", "at_application"])
+def test_protected_attributes_excluded_from_both_feature_sets(feature_set):
+    """Fair lending (ECOA / Reg B and equivalents): gender and marital_status must not
+    reach any model, including the portfolio one. Session 8's scan showed both are noise
+    against the ~21.8% base rate, so this costs no accuracy."""
+    cols = get_feature_columns(ML_FEATURES_COLUMNS, feature_set)
+    leaked = set(PROTECTED_ATTRIBUTE_COLS) & set(cols)
+    assert not leaked, f"protected attributes reached the {feature_set} feature set: {sorted(leaked)}"
 
 
 def test_every_feature_column_is_classified():
