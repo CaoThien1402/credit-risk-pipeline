@@ -622,3 +622,108 @@ Buổi 9 giờ là **code do AI sinh**, theo đúng lựa chọn của bạn, v�
 Nhưng hệ quả vẫn còn nguyên: nếu phỏng vấn hỏi *"giải thích vì sao `StandardScaler` phải fit sau split"*, câu trả lời trung thực là **"tôi đọc và hiểu phần này"**, không phải "tôi tự rút ra". Phần lý do đã được viết ngay trong docstring của `model/preprocessing.py` chính là để bạn đọc nó một lần cho kỹ.
 
 Phần **vẫn hoàn toàn là của bạn** và đáng kể trong phỏng vấn: quyết định loại `gender`/`marital_status` vì fair lending, cách đọc con số 0.5004 của `past_delinquencies`, và diễn giải khoảng chênh 0.064/0.097 giữa 2 model. Đó mới là phần khó, và nó không nằm trong bất kỳ prompt nào.
+
+
+---
+---
+
+# GHI CHÚ TRỰC TIẾP — Giải thích số liệu buổi 9 (và buổi 10) khi phỏng vấn
+
+**Mục đích của phần này**: không phải để đọc thuộc lòng. Mỗi mục có 3 phần — con số là gì, tại sao nó ra như vậy, và câu hỏi phỏng vấn viên thường hỏi kèm hướng trả lời. Đọc để hiểu, không phải để chép.
+
+## 1. Base rate 21.8% — vì sao nó là điểm quy chiếu cho mọi thứ khác
+
+Base rate = tỷ lệ default thật trong dữ liệu (7,109/32,581 ≈ 21.8%). Đây không phải một con số phụ — nó là **sàn** để đọc mọi metric khác:
+
+- PR-AUC của một model vô dụng (đoán ngẫu nhiên theo tỷ lệ) **bằng đúng base rate**. Đã verify: `DummyClassifier` cho PR-AUC 0.2200, gần khớp base rate 0.2182.
+- ROC-AUC của model vô dụng luôn là 0.5, bất kể base rate — đây là điểm khác biệt quan trọng giữa 2 metric.
+
+**Nếu bị hỏi**: *"Tại sao không dùng accuracy?"* → Với base rate 21.8%, một model luôn đoán "không default" đã đạt 78.2% accuracy mà không học được gì. Accuracy là metric vô dụng trên dữ liệu mất cân bằng này.
+
+## 2. ROC-AUC vs PR-AUC — tại sao dùng cả hai, và tại sao PR-AUC quan trọng hơn
+
+- **ROC-AUC**: khả năng xếp hạng đúng một cặp (1 default, 1 không-default) ngẫu nhiên. Ổn định, dễ hiểu, nhưng **không nhạy với imbalance** — nó tính cả True Negative, mà 78.2% dữ liệu là negative nên rất dễ đạt.
+- **PR-AUC**: chỉ nhìn vào precision/recall của lớp positive (default). Bỏ qua True Negative hoàn toàn.
+
+**Con số thật đã thấy (buổi 9)**: bỏ `loan_grade`/`loan_int_rate` làm ROC-AUC giảm 0.064 nhưng PR-AUC giảm 0.097 — giảm nhiều hơn. Đây không phải trùng hợp: 2 cột đó đặc biệt mạnh trong việc phân biệt nhóm default (positive) khỏi nhóm còn lại, nên bỏ chúng làm tổn thương đúng cái PR-AUC đo.
+
+**Nếu bị hỏi**: *"Tại sao PR-AUC là metric chính chứ không phải ROC-AUC?"* → Vì bài toán này quan tâm nhất đến việc **tìm đúng người sẽ default** (positive class), không phải xếp hạng tổng thể. PR-AUC phạt nặng hơn khi model bỏ sót hoặc báo sai nhóm thiểu số — đúng cái ngân hàng quan tâm. Đây cũng chính là lý do buổi 11 chọn PR-AUC làm trọng tài giữa `scale_pos_weight` và SMOTE.
+
+## 3. Khoảng chênh portfolio vs at_application — "cái giá của việc không gian lận"
+
+| | ROC-AUC | PR-AUC |
+|---|---|---|
+| `portfolio` (giữ `loan_grade`/`loan_int_rate`) | 0.8713 | 0.7206 |
+| `at_application` (bỏ 2 cột) | 0.8072 | 0.6240 |
+| **chênh lệch** | **0.0640** | **0.0966** |
+
+**Nếu bị hỏi**: *"Tại sao không dùng model portfolio luôn cho điểm cao hơn?"* → Vì 2 cột đó **không tồn tại tại thời điểm** khách hàng nộp đơn — chúng là output của bước underwriting, sinh ra *sau* quyết định mà model này tồn tại để đưa ra. Dùng chúng là feedback loop: model học từ kết quả của chính quy trình nó đang cố thay thế. Con số 0.064/0.097 chính là "giá" phải trả để có một model chạy được thật ở application time — và việc đo được cái giá đó, thay vì chỉ nói suông "có leakage", là phần quan trọng nhất của câu trả lời.
+
+## 4. `class_weight="balanced"` — tại sao không resample
+
+Với base rate 21.8%, nếu train bình thường thì mô hình có rất ít áp lực gradient để học nhóm thiểu số (đoán "không default" cho tất cả đã đúng 78%). `class_weight="balanced"` **rescale loss function** — sai lầm trên mẫu positive bị phạt nặng hơn theo đúng tỷ lệ nghịch với tần suất — mà **không thêm/bớt dòng nào** trong dữ liệu train.
+
+**Nếu bị hỏi**: *"Sao không dùng SMOTE ngay từ đầu cho nhanh?"* → SMOTE tạo ra dòng dữ liệu tổng hợp (nội suy giữa các điểm positive có thật), nghĩa là model học từ những điểm **không thực sự tồn tại** trong dữ liệu gốc. `class_weight`/`scale_pos_weight` không có rủi ro này vì không đụng vào dữ liệu, chỉ đụng vào loss. Đây cũng chính là lý do buổi 10 dùng `scale_pos_weight` trước, và buổi 11 mới so sánh với SMOTE bằng số liệu thật thay vì chọn bừa.
+
+## 5. `StandardScaler` fit sau `train_test_split` — câu hỏi kinh điển
+
+**Nếu bị hỏi**: *"Giải thích vì sao StandardScaler phải fit sau khi split, không phải trước?"*
+
+→ Nếu fit `StandardScaler` trên toàn bộ dữ liệu rồi mới `train_test_split`, thì mean/std dùng để chuẩn hoá đã "nhìn thấy" cả tập test — thông tin phân phối của test rò vào tham số của bước tiền xử lý, dù bản thân model chưa hề thấy nhãn test. Kết quả: điểm đánh giá trên test bị lạc quan giả tạo, vì test không còn thực sự "chưa từng thấy" nữa.
+
+**Điểm nhấn quan trọng** (rút ra trực tiếp từ quá trình làm project này, không phải sách vở): lỗi này **không để lại dấu vết trên object đã fit**. Đã tự kiểm chứng: nhét một `StandardScaler` fit sẵn trên train+test vào `ColumnTransformer` rồi gọi `.fit()` lại — `ColumnTransformer.fit()` **clone và fit lại từ đầu**, trạng thái cũ bị xoá sạch. Nghĩa là không thể viết một unit test kiểm tra "object pipeline" để bắt lỗi này; tín hiệu duy nhất đáng tin là **thứ tự lệnh trong source code** (đã viết `test_notebook_does_not_fit_before_train_test_split` để canh đúng chỗ này). Đây là chi tiết ít người biết và rất đáng nói nếu được hỏi sâu.
+
+## 6. `OneHotEncoder` thay vì `LabelEncoder`
+
+`LabelEncoder` gán số nguyên 0, 1, 2... cho mỗi category. Với biến **nominal** (không có thứ tự tự nhiên, ví dụ `home_ownership`: RENT/OWN/MORTGAGE), việc gán số ngầm định một quan hệ thứ tự và khoảng cách không có thật — model tuyến tính sẽ hiểu "RENT gần OWN hơn MORTGAGE" và "khoảng cách RENT→MORTGAGE gấp đôi RENT→OWN", cả hai đều vô nghĩa. `OneHotEncoder` tách mỗi category thành 1 cột nhị phân độc lập, không áp đặt thứ tự.
+
+**Ngoại lệ đáng nói**: `loan_grade` (A đến G) **thực sự có thứ tự**. Hiện tại project vẫn one-hot nó (an toàn, đúng) nhưng chưa tận dụng tính ordinal — đây là quyết định mở, và biết chỉ ra ngoại lệ này cho thấy hiểu bản chất quy tắc chứ không học thuộc lòng.
+
+## 7. `handle_unknown="ignore"` — đánh đổi thật, không phải mặc định
+
+Form nhập liệu ở buổi 13 hoàn toàn có thể gửi lên một category chưa từng thấy lúc train (ví dụ `loan_intent` mới). Nếu để `OneHotEncoder` mặc định, nó sẽ raise lỗi và sập app trên một input hợp lệ của người dùng. `handle_unknown="ignore"` mã hoá category lạ thành toàn số 0 — app không sập, nhưng dự đoán cho dòng đó kém tin cậy hơn.
+
+**Nếu bị hỏi**: *"Đánh đổi này có ổn không?"* → Ổn trong bối cảnh này vì mọi trường categorical trong form đều là dropdown đóng — category lạ chỉ xảy ra khi dữ liệu train đã cũ (có category mới xuất hiện sau này), không phải do người dùng gõ bừa. Nếu form cho nhập tự do thì cách xử lý này sẽ cần xem lại.
+
+## 8. 9/22 cột là nhiễu thống kê — phát hiện quan trọng nhất, không nằm trong plan gốc
+
+Quét single-feature AUC toàn bộ 22 cột: `past_delinquencies` AUC 0.5004, `open_accounts` 0.4980, `credit_utilization_ratio` 0.5051 — gần như tung đồng xu. Trong dữ liệu bureau thật, đây là những predictor **mạnh nhất** của default. Ở mức 0.5 nghĩa là chúng được sinh **độc lập với target**.
+
+**Nếu bị hỏi**: *"Model của bạn học được gì?"* → Tín hiệu thật đến gần như toàn bộ từ 12 cột gốc của bộ dữ liệu (`loan_percent_income` AUC 0.72, `loan_int_rate` 0.71, `debt_to_income_ratio` 0.70), không phải từ phần dữ liệu được thêm vào sau. Đây là câu trả lời trung thực, và nói được nó cho thấy đã tự phân tích thay vì chỉ chạy model rồi báo cáo AUC.
+
+**Hệ quả cho SHAP (buổi 12)**: SHAP sẽ vẫn gán importance cho `past_delinquencies` dù nó là nhiễu — vì SHAP đo "model dùng cột này nhiều hay ít trong cây quyết định", không đo "cột này có thật sự dự đoán đúng không". Phải phân biệt được 2 khái niệm này khi trình bày SHAP.
+
+## 9. Loại `gender`/`marital_status` — quyết định về pháp lý, không phải thống kê
+
+Khác với `loan_grade` (loại vì leakage), `gender`/`marital_status` bị loại vì lý do **hoàn toàn khác**: đây là protected attributes theo luật tín dụng tiêu dùng (ECOA/Regulation B ở Mỹ, tương đương ở Canada/UK — cả 3 nước đều có trong dataset). Dùng chúng làm input là vấn đề tuân thủ, **bất kể** chúng có dự đoán tốt hay không.
+
+**Nếu bị hỏi**: *"Nếu gender dự đoán rất tốt thì có nên dùng không?"* → Không. Đây chính là điểm phân biệt 2 loại "loại bỏ cột": leakage bị loại vì nó không có sẵn tại thời điểm quyết định; protected attribute bị loại vì luật cấm dùng nó **dù có sẵn và dù dự đoán tốt**. May mắn là ở đây cả hai đều là nhiễu (0.11pp và 0.59pp spread) nên quyết định không phải đánh đổi accuracy, nhưng lập luận phải đứng vững ngay cả khi giả sử chúng có tín hiệu mạnh.
+
+---
+
+## Buổi 10 — XGBoost: 3 điều nên nói được
+
+## 10. `scale_pos_weight` — công thức và vì sao tính trên train, không phải toàn bộ dữ liệu
+
+Công thức: `scale_pos_weight = số dòng negative / số dòng positive`, tính trên **tập train**: 20,378 / 5,686 = **3.5839**. Đây là bản tương đương của `class_weight="balanced"` cho gradient boosting — XGBoost nhân hệ số này vào gradient của các dòng positive.
+
+**Nếu bị hỏi**: *"Sao không tính trên toàn bộ dataset cho chính xác hơn?"* → Vì đó chính là kiểu leakage đã tránh ở `StandardScaler` — tính tỷ lệ class trên cả tập test nghĩa là một hyperparameter huấn luyện "biết trước" phân phối chính xác của test. Cùng một nguyên tắc kỷ luật fit-chỉ-trên-train, áp dụng cho một hyperparameter thay vì một transformer.
+
+## 11. Kết quả buổi 10, và vì sao dự đoán trước đó lại sai
+
+| | ROC-AUC | PR-AUC |
+|---|---|---|
+| LR baseline (`at_application`) | 0.8072 | 0.6240 |
+| XGBoost (`at_application`) | **0.8907** | **0.8055** |
+
+Dự đoán viết trước khi chạy là 0.82-0.84 — **sai**, kết quả thật cao hơn hẳn. Đây không phải điểm yếu để giấu đi, mà là **điểm mạnh để kể**: thay vì chấp nhận con số đẹp và đi tiếp, đã điều tra lại — kiểm tra không có leakage lọt vào, so sánh AUC train (0.9178) vs test (0.8907) để loại khả năng overfit nghiêm trọng, và chạy 5-fold CV.
+
+**Nếu bị hỏi**: *"Bạn tin con số 0.8907 đến mức nào?"* → Đây là câu hỏi hay nhất có thể gặp, và câu trả lời sạch nhất: 5-fold CV cho khoảng **0.8606 ± 0.0355** (dao động 0.804 đến 0.911 giữa các fold) — rộng gấp ~5 lần độ lệch chuẩn của baseline Logistic Regression (±0.0066). Nghĩa là: cải thiện so với LR là **thật** (CV mean 0.8606 vẫn cao hơn hẳn CV mean của LR là 0.8042), nhưng **độ chính xác của riêng con số 0.8907** thấp hơn một số liệu holdout đơn lẻ khiến người nghe tưởng. Trả lời được điều này cho thấy hiểu sự khác biệt giữa "model tốt hơn" và "con số cụ thể đáng tin đến đâu" — phân biệt mà nhiều người làm ML bỏ qua.
+
+## 12. Vì sao chưa dùng SMOTE ở buổi 10
+
+Theo đúng kế hoạch: buổi 10 chỉ dùng `scale_pos_weight`, buổi 11 mới thêm SMOTE và so sánh 2 cách bằng PR-AUC. Lý do tách riêng: nếu làm cả hai cùng lúc, không biết phần cải thiện (hay tệ đi) đến từ thay đổi nào. Đây là thực hành thí nghiệm có kiểm soát — đổi một biến tại một thời điểm.
+
+---
+
+**Ghi chú cuối**: phần lớn code buổi 9-10 do AI viết theo yêu cầu trực tiếp, không phải tự tay gõ. Câu trả lời trung thực nếu bị hỏi "bạn tự viết dòng này à?" là **"tôi hiểu và đã kiểm chứng nó, không tự derive từ đầu"** — còn phần thực sự của riêng mình, đứng vững trong mọi câu hỏi trên, là: đọc con số, phát hiện khi dự đoán sai, biết hỏi "có nên tin số này không" thay vì báo cáo nó, và các quyết định nghiệp vụ (fair lending, chọn PR-AUC, loại leakage). Đó mới là thứ một cuộc phỏng vấn thực sự muốn nghe.

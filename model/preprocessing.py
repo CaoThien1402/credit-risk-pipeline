@@ -22,6 +22,7 @@ The two decisions worth being able to defend:
    to an OrdinalEncoder is an open session 10-11 decision.)
 """
 
+from sklearn.base import BaseEstimator
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -63,26 +64,39 @@ def build_preprocessor(numeric_cols: list[str], categorical_cols: list[str]) -> 
     )
 
 
-def build_pipeline(numeric_cols: list[str], categorical_cols: list[str]) -> Pipeline:
-    """Preprocessing + Logistic Regression baseline as one estimator, so preprocessing is
-    fit exactly once, on training data only."""
+def _default_estimator() -> LogisticRegression:
+    return LogisticRegression(
+        # ~21.8% positives: without rebalancing, predicting "no default" for everyone
+        # already scores 78% accuracy, and the model has little gradient pressure to find
+        # defaulters. class_weight rescales the loss rather than resampling, so no
+        # synthetic rows enter the training set (SMOTE is evaluated separately in
+        # session 11).
+        class_weight="balanced",
+        # lbfgs defaults to 100 iterations and does not converge on this feature matrix
+        # once one-hot expands it.
+        max_iter=2000,
+        random_state=42,
+    )
+
+
+def build_pipeline(
+    numeric_cols: list[str],
+    categorical_cols: list[str],
+    estimator: BaseEstimator | None = None,
+) -> Pipeline:
+    """Preprocessing + a final estimator as one Pipeline, so preprocessing is fit exactly
+    once, on training data only.
+
+    `estimator` defaults to the session 9 Logistic Regression baseline. Session 10-11
+    pass an XGBoost/other classifier here instead - the ColumnTransformer built by
+    build_preprocessor is reused unchanged, so there is exactly one place that defines
+    what "numeric" and "categorical" mean for this dataset, not one copy per notebook.
+    """
+    if estimator is None:
+        estimator = _default_estimator()
     return Pipeline(
         steps=[
             ("preprocessor", build_preprocessor(numeric_cols, categorical_cols)),
-            (
-                "classifier",
-                LogisticRegression(
-                    # ~21.8% positives: without rebalancing, predicting "no default" for
-                    # everyone already scores 78% accuracy, and the model has little
-                    # gradient pressure to find defaulters. class_weight rescales the loss
-                    # rather than resampling, so no synthetic rows enter the training set
-                    # (SMOTE is evaluated separately in session 11).
-                    class_weight="balanced",
-                    # lbfgs defaults to 100 iterations and does not converge on this
-                    # feature matrix once one-hot expands it.
-                    max_iter=2000,
-                    random_state=42,
-                ),
-            ),
+            ("classifier", estimator),
         ]
     )
