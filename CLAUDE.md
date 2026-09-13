@@ -86,11 +86,21 @@ streamlit run app/app.py
 - Model artifacts save as a bundle dict (`model`, `preprocessor`, `feature_names`, `trained_at`, `metrics`), never a bare model — `app.py` needs the preprocessor to transform new input consistently.
 - Feature logic lives in `sql/views.sql`, not duplicated in pandas. Query `ml_features`/`dashboard_aggregates` via `pd.read_sql("SELECT * FROM ml_features", engine)`; don't rewrite the joins in Python.
 
-## Git workflow (adopted 2026-09-09)
+## Git workflow (adopted 2026-09-09, permission gate added 2026-09-13)
 
-Every change goes through a feature branch → PR → self-review → merge, even solo —
-this is a deliberate habit-building choice (common in real DE/DS job descriptions),
-not overhead to skip. Never commit straight to `main`. Concretely:
+**Only commit, push, or open/merge a PR when the user explicitly asks for it in that
+message** — phrases like "push this", "commit it", "create a PR", "push to GitHub". Fixing
+a bug, implementing a feature, or running a review does **not** by itself imply permission
+to touch git. Edit files, run tests, verify the fix — then stop and report what changed
+and that it's uncommitted, instead of automatically branching/committing/pushing/opening
+a PR. This overrides the default assumption in earlier sessions of this repo that every
+change gets its own branch+PR automatically; from 2026-09-13 onward that only happens on
+explicit request.
+
+Once the user does ask for it, every change still goes through a feature branch → PR →
+self-review → merge, even solo — this is a deliberate habit-building choice (common in
+real DE/DS job descriptions), not overhead to skip. Never commit straight to `main`.
+Concretely:
 
 1. `git checkout -b <type>/<short-description>` (e.g. `feat/session-9-baseline`)
 2. Commit, push the branch, open a PR with `gh pr create` and a clear description
