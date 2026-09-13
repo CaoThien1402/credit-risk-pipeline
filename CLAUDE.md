@@ -15,12 +15,15 @@ sql/       schema.sql (DDL + rationale comments), views.sql (ml_features — bas
 etl/       historical_load.py, daily_ingest.py, config.py (DB connection),
            run_daily_ingest.ps1 (Windows Task Scheduler wrapper, see below)
 data/      Credit_Risk_Dataset.xlsx — committed to the repo (not gitignored)
-notebooks/ 01_eda.ipynb, 02_baseline_model.ipynb (session 9+), figures/ (PNGs exported
-           for the README, via kaleido)
+notebooks/ 01_eda.ipynb, 02_baseline_model.ipynb (session 9, Logistic Regression
+           baseline), 03_xgboost_model.ipynb (session 10, XGBoost + scale_pos_weight),
+           figures/ (PNGs exported for the README, via kaleido)
 model/     features.py (column bookkeeping: ID/target/leakage/protected-attribute cols,
-           categorical lists), preprocessing.py (ColumnTransformer + Pipeline, reused
-           as-is by sessions 10-12 and saved as `preprocessor` in the session 12 bundle),
-           bundle.py (validates the model-bundle contract app/utils.py depends on)
+           categorical lists), preprocessing.py (ColumnTransformer shared by every
+           session; build_pipeline(..., estimator=...) — defaults to session 9's
+           Logistic Regression, session 10+ pass XGBoost/other estimators through this
+           same parameter rather than rebuilding the ColumnTransformer), bundle.py
+           (validates the model-bundle contract app/utils.py depends on)
 models/    *.pkl joblib bundles — gitignored, not committed
 app/       app.py (Streamlit, 2 tabs), utils.py
 tests/     pytest — etl/ function tests, model/ column-split + preprocessing-discipline
@@ -52,6 +55,7 @@ bash scripts/dump_db.sh          # refresh db-seed/01_seed.sql after changing th
 uv run pytest tests/             # pytest is a dev dependency, not in the main deps
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_baseline_model.ipynb
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/03_xgboost_model.ipynb
 streamlit run app/app.py
 ```
 
@@ -75,7 +79,7 @@ streamlit run app/app.py
 
 **The schema has 4 tables**: `cities`, `customers`, `credit_bureau`, `loans`. This has been mis-stated as "5 bảng" twice now — once in the original v1 draft (had a separate `locations` table), and again when v3 of the plan was drafted from scratch in a different chat that didn't know about the v2 fix. If the plan doc gets regenerated or edited externally again, re-check this number before trusting it.
 
-**Session 9+ preprocessing goes through `model/preprocessing.py::build_pipeline`, never hand-rolled per notebook.** `StandardScaler` for numerics and `OneHotEncoder` (not `LabelEncoder` — it implies order and distance a linear model will misread) for categoricals, both inside one `ColumnTransformer`, so `Pipeline.fit(X_train, ...)` after `train_test_split` is the only thing that ever fits them. Fitting on the full dataset first leaks test-set statistics into training and leaves no trace in the fitted object — `tests/test_preprocessing.py::test_notebook_does_not_fit_before_train_test_split` guards the ordering at notebook-source level, because a pipeline-level assertion provably cannot catch it (`ColumnTransformer.fit` clones and re-fits its transformers, discarding any pre-fitted state). Sessions 10-11 reuse this pipeline and swap only the final estimator; session 12 saves the fitted `ColumnTransformer` as `preprocessor` in the model bundle. `OneHotEncoder` uses `handle_unknown="ignore"` so the session 13 form can't crash the app on a category absent from training data — see the rationale comment in the file before changing it.
+**Session 9+ preprocessing goes through `model/preprocessing.py::build_pipeline`, never hand-rolled per notebook.** `StandardScaler` for numerics and `OneHotEncoder` (not `LabelEncoder` — it implies order and distance a linear model will misread) for categoricals, both inside one `ColumnTransformer`, so `Pipeline.fit(X_train, ...)` after `train_test_split` is the only thing that ever fits them. Fitting on the full dataset first leaks test-set statistics into training and leaves no trace in the fitted object — `tests/test_preprocessing.py::test_notebook_does_not_fit_before_train_test_split` guards the ordering at notebook-source level, because a pipeline-level assertion provably cannot catch it (`ColumnTransformer.fit` clones and re-fits its transformers, discarding any pre-fitted state). `build_pipeline(numeric_cols, categorical_cols, estimator=...)` — session 10's XGBoost passes its own estimator through this parameter rather than rebuilding the `ColumnTransformer`; don't copy-paste the transformer setup into a new file when adding a model, or preprocessing has two sources of truth. Session 12 saves the fitted `ColumnTransformer` as `preprocessor` in the model bundle. `OneHotEncoder` uses `handle_unknown="ignore"` so the session 13 form can't crash the app on a category absent from training data — see the rationale comment in the file before changing it.
 
 ## Conventions
 

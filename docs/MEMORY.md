@@ -241,6 +241,36 @@ so the record of who derived what stays honest).
   feature sets on fair-lending grounds (ECOA/Reg B), not leakage grounds. Free to do
   since both are noise. Feature sets went portfolio 22→20, at_application 20→18.
 
+## 2026-09-13 — session 10: XGBoost, and a written prediction that was wrong
+
+- `model/preprocessing.py::build_pipeline` gained an `estimator` parameter (defaults to
+  the session 9 Logistic Regression) precisely so session 10 could reuse
+  `build_preprocessor` unchanged instead of copy-pasting the `ColumnTransformer` into a
+  new file. Verified both the default path and a custom-estimator path build and fit
+  correctly before using it for real.
+- `notebooks/03_xgboost_model.ipynb`: trained XGBoost (`n_estimators=300, max_depth=4,
+  learning_rate=0.05`) for both feature sets, `scale_pos_weight` computed from the
+  **train split only** (3.5839 = 20378 negative / 5686 positive), no SMOTE (that's
+  session 11's comparison). Results: `portfolio` ROC-AUC 0.9372 / PR-AUC 0.8846,
+  `at_application` ROC-AUC 0.8907 / PR-AUC 0.8055 — both clear improvements over session
+  9's Logistic Regression baseline (0.8713/0.7206 and 0.8072/0.6240).
+- The notebook wrote an expected range (0.82-0.84 ROC-AUC for `at_application`) *before*
+  running, per the prior review's recommendation. **The prediction was wrong** — actual
+  was 0.8907, well above the predicted range though still under the 0.90
+  stop-and-investigate line that was also written down beforehand. Investigated rather
+  than accepted at face value: confirmed no leakage column reached the pipeline, checked
+  train-vs-test gap (0.9178 vs 0.8907 — mild overfitting, not dramatic), and ran 5-fold
+  CV, which is the finding worth keeping — `at_application` folds ranged 0.804 to 0.911
+  (mean 0.8606 ± 0.0355), roughly 5x the fold-to-fold variance of session 9's Logistic
+  Regression baseline (± 0.0066). The gain over the linear baseline is real (CV mean
+  0.8606 clearly above session 9's CV mean 0.8042, so not just a lucky split), but a
+  single holdout number understates how much that number could move on a different
+  split. Session 9's tighter written expectation assumed LR-like sampling noise; XGBoost
+  on ~5,700 positive training rows doesn't behave that way.
+- Practical lesson for future sessions: writing the expectation down before running is
+  valuable specifically *because* it can be wrong — the value is in being forced to
+  investigate the gap, not in getting the number right on the first guess.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.
