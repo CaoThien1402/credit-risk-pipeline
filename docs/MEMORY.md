@@ -271,6 +271,41 @@ so the record of who derived what stays honest).
   valuable specifically *because* it can be wrong — the value is in being forced to
   investigate the gap, not in getting the number right on the first guess.
 
+## 2026-09-15 — session 11 (SMOTE), and a correction to session 10's CV claim
+
+- **`scale_pos_weight` beats SMOTE** on the at-application model and is what ships.
+  Holdout PR-AUC 0.8055 vs 0.7796; shuffled 5-fold CV 0.8027 ± 0.0094 vs 0.7780 ± 0.0088.
+  The gap (0.026) is ~2.8x the fold std and the two fold ranges don't overlap at all
+  (0.7879-0.8168 vs 0.7677-0.7932) — every fold prefers `scale_pos_weight`. It's also the
+  easier model to defend: trained on real rows only, not interpolated ones.
+- `build_pipeline` gained an optional `sampler` argument that switches the container to
+  `imblearn.pipeline.Pipeline`. That distinction is load-bearing: an imblearn Pipeline
+  runs the sampler during `fit` and bypasses it during `predict`, so SMOTE never touches
+  the data being scored. Guarded by
+  `test_sampler_does_not_resample_the_data_being_scored`.
+- **Correction — session 10's "0.8606 ± 0.0355, variance 5x the baseline" was wrong.**
+  It came from `cross_val_score(..., cv=5)`, which splits **without shuffling**, and the
+  rows of `ml_features` are not randomly ordered w.r.t. the target: default rate across
+  five contiguous blocks of the table is 27.8%, 19.1%, 24.3%, 18.0%, 20.0%. The view has
+  no `ORDER BY`, so rows arrive in heap order ≈ insertion order ≈ the original
+  spreadsheet's order, and that order carries structure. Unshuffled folds were measuring
+  the table's ordering, not the model's stability.
+  With `StratifiedKFold(shuffle=True, random_state=42)`: **0.8923 ± 0.0048**. Two
+  conclusions flip — the holdout 0.8907 matches the CV mean to within 0.002 (it was never
+  "optimistic"), and XGBoost's spread is *tighter* than the Logistic Regression
+  baseline's (±0.0083), not 5x wider.
+- Lesson worth keeping: `cross_val_score(cv=5)` silently means unshuffled. On any dataset
+  whose row order isn't random that measures the wrong thing. Always pass an explicit
+  `StratifiedKFold(shuffle=True, random_state=...)`. Corrected in README.md,
+  notebooks/03, and REVIEW.md's interview notes rather than quietly overwritten — the
+  original instinct (don't quote one holdout number unchecked) was right; the check
+  itself was wrong the first time.
+- Shuffled-CV reference numbers, all `StratifiedKFold(shuffle=True, random_state=42)`:
+  LR portfolio ROC 0.8701 ± 0.0030 / PR 0.7164 ± 0.0065; LR at_application ROC
+  0.8062 ± 0.0083 / PR 0.6183 ± 0.0141; XGB at_application ROC 0.8923 ± 0.0048 / PR
+  0.8027 ± 0.0094. Every holdout number in this project agrees with its shuffled CV mean
+  to within ~0.002, so the holdout split is representative.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.

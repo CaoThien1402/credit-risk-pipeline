@@ -17,6 +17,7 @@ etl/       historical_load.py, daily_ingest.py, config.py (DB connection),
 data/      Credit_Risk_Dataset.xlsx — committed to the repo (not gitignored)
 notebooks/ 01_eda.ipynb, 02_baseline_model.ipynb (session 9, Logistic Regression
            baseline), 03_xgboost_model.ipynb (session 10, XGBoost + scale_pos_weight),
+           04_smote_comparison.ipynb (session 11, SMOTE vs scale_pos_weight),
            figures/ (PNGs exported for the README, via kaleido)
 model/     features.py (column bookkeeping: ID/target/leakage/protected-attribute cols,
            categorical lists), preprocessing.py (ColumnTransformer shared by every
@@ -56,6 +57,7 @@ uv run pytest tests/             # pytest is a dev dependency, not in the main d
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipynb
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_baseline_model.ipynb
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/03_xgboost_model.ipynb
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/04_smote_comparison.ipynb
 streamlit run app/app.py
 ```
 
@@ -78,6 +80,10 @@ streamlit run app/app.py
 **`customers.age` is `NOT NULL`, but `clean_outliers` only caps it to `NaN` — it doesn't impute.** A handful of real rows hit this (see `docs/MEMORY.md` for the exact rows/values). `impute_missing()` median-imputes `person_age` too, alongside `emp_length`/`loan_int_rate`, as a stopgap so the historical load doesn't fail on the `NOT NULL` constraint. This was a judgment call (user-confirmed), not part of the original session 3-4 prompt. Session 8's EDA confirmed median imputation is reasonable: both missingness patterns look MCAR, not MAR — no grade/group signal a smarter imputer would exploit (numbers in `docs/MEMORY.md`). Don't remove the `person_age` line from `impute_missing()` without replacing it with something else that keeps every row's age non-null before insert.
 
 **The schema has 4 tables**: `cities`, `customers`, `credit_bureau`, `loans`. This has been mis-stated as "5 bảng" twice now — once in the original v1 draft (had a separate `locations` table), and again when v3 of the plan was drafted from scratch in a different chat that didn't know about the v2 fix. If the plan doc gets regenerated or edited externally again, re-check this number before trusting it.
+
+**Cross-validate with `StratifiedKFold(shuffle=True, random_state=...)`, never bare `cv=5`.** `cross_val_score(..., cv=5)` splits without shuffling, and this dataset's row order is not random with respect to the target — default rate across five contiguous blocks of `ml_features` runs 27.8%, 19.1%, 24.3%, 18.0%, 20.0% (the view has no `ORDER BY`, so rows arrive in insertion order ≈ the original spreadsheet's order). Unshuffled folds therefore measure the table's ordering, not the model. This already produced one wrong published conclusion: session 10 reported XGBoost at 0.8606 ± 0.0355 and called it unstable; shuffled it is 0.8923 ± 0.0048, tighter than the Logistic Regression baseline. Numbers in `docs/MEMORY.md`.
+
+**SMOTE lost to `scale_pos_weight` and is not used in the shipped model** (session 11: PR-AUC 0.8055 vs 0.7796, non-overlapping fold ranges). If a sampler is reintroduced it must go through `build_pipeline(..., sampler=...)`, which switches to `imblearn.pipeline.Pipeline` — an imblearn Pipeline runs the sampler only during `fit` and bypasses it at `predict`, so synthetic rows never reach the data being scored. A sampler placed in a plain sklearn Pipeline would resample at predict time too, which silently inflates every metric.
 
 **Session 9+ preprocessing goes through `model/preprocessing.py::build_pipeline`, never hand-rolled per notebook.** `StandardScaler` for numerics and `OneHotEncoder` (not `LabelEncoder` — it implies order and distance a linear model will misread) for categoricals, both inside one `ColumnTransformer`, so `Pipeline.fit(X_train, ...)` after `train_test_split` is the only thing that ever fits them. Fitting on the full dataset first leaks test-set statistics into training and leaves no trace in the fitted object — `tests/test_preprocessing.py::test_notebook_does_not_fit_before_train_test_split` guards the ordering at notebook-source level, because a pipeline-level assertion provably cannot catch it (`ColumnTransformer.fit` clones and re-fits its transformers, discarding any pre-fitted state). `build_pipeline(numeric_cols, categorical_cols, estimator=...)` — session 10's XGBoost passes its own estimator through this parameter rather than rebuilding the `ColumnTransformer`; don't copy-paste the transformer setup into a new file when adding a model, or preprocessing has two sources of truth. Session 12 saves the fitted `ColumnTransformer` as `preprocessor` in the model bundle. `OneHotEncoder` uses `handle_unknown="ignore"` so the session 13 form can't crash the app on a category absent from training data — see the rationale comment in the file before changing it.
 
