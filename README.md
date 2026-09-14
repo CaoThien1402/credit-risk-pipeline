@@ -3,6 +3,72 @@
 Scaffold for the 17-session plan in `docs/Credit_Risk_Pipeline_Plan_v3.md`, with fixes already
 integrated from a direct audit of `Credit_Risk_Dataset.xlsx` (32,581 rows, 29 columns).
 
+## Pipeline shape
+
+```mermaid
+flowchart LR
+    XLSX["Credit_Risk_Dataset.xlsx<br/>32,581 rows"]
+    ETL["etl/historical_load.py<br/>cap outliers → impute → split"]
+    DAILY["etl/daily_ingest.py<br/>Task Scheduler, 20:00 daily"]
+    DB[("PostgreSQL<br/>cities · customers<br/>credit_bureau · loans")]
+    MLV["view: ml_features<br/>historical rows only"]
+    DASHV["view: dashboard_aggregates<br/>ml_features + 3 window cols"]
+    ATAPP["at-application model<br/>no loan_grade / loan_int_rate"]
+    PORT["portfolio model<br/>keeps both"]
+    TAB1["Streamlit tab 1<br/>approve / reject"]
+    TAB2["Streamlit tab 2<br/>portfolio dashboard"]
+
+    XLSX --> ETL --> DB
+    DAILY --> DB
+    DB --> MLV
+    DB --> DASHV
+    MLV --> ATAPP
+    MLV --> PORT
+    ATAPP --> TAB1
+    DASHV --> TAB2
+```
+
+The split into two views is the load-bearing part: `ml_features` is what training reads,
+and it structurally cannot expose the three dashboard-only window columns — one of which
+is `AVG(loan_status)`, the target itself. That's a schema-level guarantee, not a
+convention someone has to remember.
+
+## Results
+
+Test set is a stratified 20% holdout (`random_state=42`), same split for every row below.
+Base rate is 21.8% defaults, which is also the PR-AUC a no-skill model scores.
+
+| Model | Feature set | Holdout ROC-AUC | Holdout PR-AUC | 5-fold CV ROC-AUC |
+|---|---|---|---|---|
+| Logistic Regression (session 9) | `portfolio` | 0.8713 | 0.7206 | 0.8701 ± 0.0030 |
+| Logistic Regression (session 9) | `at_application` | 0.8072 | 0.6240 | 0.8062 ± 0.0083 |
+| XGBoost (session 10) | `portfolio` | 0.9372 | 0.8846 | — |
+| XGBoost + `scale_pos_weight` (session 10-11) | **`at_application`** | **0.8907** | **0.8055** | **0.8923 ± 0.0048** |
+| XGBoost + SMOTE (session 11) | `at_application` | 0.8707 | 0.7796 | 0.8715 ± 0.0055 |
+
+CV figures use `StratifiedKFold(shuffle=True)`. Shuffling is not optional here: the rows
+of `ml_features` are not randomly ordered with respect to the target (default rate across
+five contiguous blocks of the table runs 27.8%, 19.1%, 24.3%, 18.0%, 20.0%), so unshuffled
+folds measure the table's row order rather than the model. An earlier version of this
+section quoted 0.8606 ± 0.0355 from unshuffled CV and drew the wrong conclusion from it —
+see `notebooks/04_smote_comparison.ipynb` for the correction.
+
+**Session 11 result**: `scale_pos_weight` beats SMOTE by 0.026 PR-AUC, with
+non-overlapping fold ranges — every fold prefers it. The shipped at-application model
+therefore trains on real rows only, with the loss reweighted, rather than on synthesised
+minority rows.
+
+`at_application` is the model that matters — it excludes `loan_grade` and `loan_int_rate`,
+which are underwriting *outputs* and therefore unavailable at the moment an application is
+actually decided. The gap to `portfolio` is the measurable cost of refusing to use them.
+
+**Caveat on the ceiling**: session 8's scan found 9 of the 18 at-application features are
+statistically indistinguishable from noise (`past_delinquencies` single-feature AUC 0.5004,
+`open_accounts` 0.4980, `credit_utilization_ratio` 0.5051) — almost certainly synthetic
+augmentation generated independently of the target. The real signal comes from the
+original dataset's own columns, and SHAP importance assigned to the noise columns in
+session 12 should be read as fitting randomness.
+
 ## Differences from the original plan
 
 | # | Issue | Fixed in |
@@ -17,6 +83,11 @@ integrated from a direct audit of `Credit_Risk_Dataset.xlsx` (32,581 rows, 29 co
 
 ## Structure
 
+> Update this tree in the same commit that adds, renames or removes a file — not "later".
+> It has gone stale more than once (`03_xgboost_model.ipynb` existed for two sessions
+> before it appeared here), and a tree that's only sometimes right is worse than no tree,
+> because a reader can't tell which parts to trust.
+
 ```
 credit-risk-pipeline/
 ├── sql/
@@ -27,11 +98,13 @@ credit-risk-pipeline/
 │   ├── historical_load.py       # bulk-loads the historical dataset
 │   └── daily_ingest.py          # simulates new daily applications
 ├── notebooks/
-│   ├── 01_eda.ipynb             # EDA, with a checklist
-│   └── 02_baseline_model.ipynb  # session 9: baseline Logistic Regression, 2 feature sets
+│   ├── 01_eda.ipynb             # session 8: EDA, missingness, leakage scan
+│   ├── 02_baseline_model.ipynb  # session 9: baseline Logistic Regression, 2 feature sets
+│   ├── 03_xgboost_model.ipynb   # session 10: XGBoost + scale_pos_weight
+│   └── 04_smote_comparison.ipynb # session 11: SMOTE vs scale_pos_weight
 ├── model/
-│   ├── features.py              # column bookkeeping (id/target/leakage/categorical)
-│   ├── preprocessing.py         # ColumnTransformer + Pipeline, written by hand
+│   ├── features.py              # column bookkeeping (id/target/leakage/protected/categorical)
+│   ├── preprocessing.py         # ColumnTransformer + Pipeline, shared by every session
 │   └── bundle.py                 # validates the model-bundle contract app.py depends on
 ├── models/                      # model bundles (.pkl) saved here
 ├── app/

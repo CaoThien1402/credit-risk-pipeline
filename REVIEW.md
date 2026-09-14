@@ -718,7 +718,15 @@ Công thức: `scale_pos_weight = số dòng negative / số dòng positive`, t�
 
 Dự đoán viết trước khi chạy là 0.82-0.84 — **sai**, kết quả thật cao hơn hẳn. Đây không phải điểm yếu để giấu đi, mà là **điểm mạnh để kể**: thay vì chấp nhận con số đẹp và đi tiếp, đã điều tra lại — kiểm tra không có leakage lọt vào, so sánh AUC train (0.9178) vs test (0.8907) để loại khả năng overfit nghiêm trọng, và chạy 5-fold CV.
 
-**Nếu bị hỏi**: *"Bạn tin con số 0.8907 đến mức nào?"* → Đây là câu hỏi hay nhất có thể gặp, và câu trả lời sạch nhất: 5-fold CV cho khoảng **0.8606 ± 0.0355** (dao động 0.804 đến 0.911 giữa các fold) — rộng gấp ~5 lần độ lệch chuẩn của baseline Logistic Regression (±0.0066). Nghĩa là: cải thiện so với LR là **thật** (CV mean 0.8606 vẫn cao hơn hẳn CV mean của LR là 0.8042), nhưng **độ chính xác của riêng con số 0.8907** thấp hơn một số liệu holdout đơn lẻ khiến người nghe tưởng. Trả lời được điều này cho thấy hiểu sự khác biệt giữa "model tốt hơn" và "con số cụ thể đáng tin đến đâu" — phân biệt mà nhiều người làm ML bỏ qua.
+**Nếu bị hỏi**: *"Bạn tin con số 0.8907 đến mức nào?"* → 5-fold CV có shuffle cho **0.8923 ± 0.0048**, tức holdout (0.8907) khớp với CV mean trong vòng 0.002 — con số này đáng tin, và model ổn định (độ lệch còn *hẹp hơn* baseline Logistic Regression ±0.0083).
+
+> **⚠️ Đây là chỗ đáng kể nhất trong cả buổi 10-11, và nên kể nguyên câu chuyện chứ không chỉ kể kết quả.**
+>
+> Lần kiểm tra CV **đầu tiên** cho ra 0.8606 ± 0.0355 và tôi đã kết luận "model không ổn định, độ lệch gấp 5 lần baseline". **Kết luận đó sai**, và sai vì lỗi phương pháp: `cross_val_score(..., cv=5)` mặc định chia fold **không shuffle**, trong khi các dòng của `ml_features` **không** xếp ngẫu nhiên theo target — tỷ lệ default theo 5 khối liên tiếp của bảng là 27.8%, 19.1%, 24.3%, 18.0%, 20.0%. View không có `ORDER BY` nên Postgres trả về theo heap order ≈ thứ tự insert ≈ thứ tự file Excel gốc, và thứ tự đó có cấu trúc. Nghĩa là fold không shuffle đang đo **thứ tự dòng trong bảng**, không phải độ ổn định của model.
+>
+> Đổi sang `StratifiedKFold(shuffle=True, random_state=42)` → 0.8923 ± 0.0048. Hai kết luận bị lật ngược: holdout chưa bao giờ "lạc quan", và XGBoost **ổn định hơn** LR chứ không phải kém hơn.
+
+**Vì sao nên kể cả phần sai**: nó cho thấy 3 thứ mà một câu trả lời "model của tôi đạt 0.89" không cho thấy — (1) biết tự kiểm tra thay vì tin số đầu tiên, (2) biết rằng *chính phép kiểm tra* cũng có thể sai, (3) biết một chi tiết API thật sự bẫy người: `cv=5` im lặng nghĩa là không shuffle. Người phỏng vấn hỏi "bạn tin số này đến mức nào" thường muốn nghe đúng loại tư duy này, không phải một con số đẹp hơn.
 
 ## 12. Vì sao chưa dùng SMOTE ở buổi 10
 

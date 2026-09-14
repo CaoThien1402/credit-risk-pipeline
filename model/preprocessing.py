@@ -83,6 +83,7 @@ def build_pipeline(
     numeric_cols: list[str],
     categorical_cols: list[str],
     estimator: BaseEstimator | None = None,
+    sampler: BaseEstimator | None = None,
 ) -> Pipeline:
     """Preprocessing + a final estimator as one Pipeline, so preprocessing is fit exactly
     once, on training data only.
@@ -91,12 +92,33 @@ def build_pipeline(
     pass an XGBoost/other classifier here instead - the ColumnTransformer built by
     build_preprocessor is reused unchanged, so there is exactly one place that defines
     what "numeric" and "categorical" mean for this dataset, not one copy per notebook.
+
+    `sampler` (session 11: SMOTE) switches the container to imblearn's Pipeline, which is
+    the only reason that dependency appears here. The distinction matters: a sampler in an
+    imblearn Pipeline runs during `fit` and is bypassed during `predict`/`transform`, so
+    synthetic minority rows are created from the training fold only and never appear in
+    the data being scored. Resampling before the split - or scoring a test set that SMOTE
+    has touched - inflates every metric and is the single most common way SMOTE results
+    get reported wrong.
+
+    Sampler position is deliberate: it sits after the preprocessor, because SMOTE
+    interpolates numerically and cannot consume raw string categoricals. The tradeoff is
+    that it interpolates one-hot columns too, producing fractional values a real one-hot
+    row could never have (SMOTENC exists for this, at the cost of bypassing the shared
+    ColumnTransformer). Noted rather than silently accepted - see session 11's notebook.
     """
     if estimator is None:
         estimator = _default_estimator()
-    return Pipeline(
-        steps=[
-            ("preprocessor", build_preprocessor(numeric_cols, categorical_cols)),
-            ("classifier", estimator),
-        ]
-    )
+
+    steps = [("preprocessor", build_preprocessor(numeric_cols, categorical_cols))]
+    if sampler is not None:
+        steps.append(("sampler", sampler))
+    steps.append(("classifier", estimator))
+
+    if sampler is None:
+        return Pipeline(steps=steps)
+
+    # Imported lazily so the sklearn-only paths don't depend on imblearn being installed.
+    from imblearn.pipeline import Pipeline as ImbalancedPipeline
+
+    return ImbalancedPipeline(steps=steps)

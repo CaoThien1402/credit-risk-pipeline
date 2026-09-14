@@ -185,3 +185,58 @@ def test_empty_column_lists_are_rejected():
     from model.preprocessing import build_preprocessor
     with pytest.raises(ValueError, match="no columns given"):
         build_preprocessor([], [])
+
+
+# --- sampler (session 11: SMOTE) ----------------------------------------------------
+
+def _imbalanced_split():
+    """~20% positives, echoing the real base rate, with enough rows for SMOTE's default
+    k_neighbors=5 to have neighbours to interpolate between."""
+    n = 100
+    train = pd.DataFrame({
+        "age": list(range(20, 20 + n)),
+        "income": [40_000.0 + 100 * i for i in range(n)],
+        "home_ownership": ["RENT", "OWN"] * (n // 2),
+        "loan_status": [1 if i % 5 == 0 else 0 for i in range(n)],
+    })
+    test = pd.DataFrame({
+        "age": [30, 45, 60],
+        "income": [50_000.0, 70_000.0, 90_000.0],
+        "home_ownership": ["RENT", "OWN", "RENT"],
+        "loan_status": [0, 1, 0],
+    })
+    return train, test
+
+
+def test_sampler_switches_to_an_imblearn_pipeline():
+    from imblearn.over_sampling import SMOTE
+    pipeline = build_pipeline(NUMERIC_COLS, CATEGORICAL_COLS, sampler=SMOTE(random_state=42))
+    assert "sampler" in pipeline.named_steps
+    assert type(pipeline).__module__.startswith("imblearn"), (
+        "a sampler needs imblearn's Pipeline - sklearn's would treat SMOTE as a "
+        "transformer and apply it at predict time too"
+    )
+
+
+def test_sampler_does_not_resample_the_data_being_scored():
+    """The failure this guards: SMOTE applied to the test set (or before the split).
+    predict_proba must return exactly one row per input row - if the sampler ran at
+    predict time, the output would be longer than the input and every metric computed
+    against the real labels would be meaningless."""
+    from imblearn.over_sampling import SMOTE
+    train, test = _imbalanced_split()
+    cols = NUMERIC_COLS + CATEGORICAL_COLS
+
+    pipeline = build_pipeline(NUMERIC_COLS, CATEGORICAL_COLS, sampler=SMOTE(random_state=42))
+    pipeline.fit(train[cols], train["loan_status"])
+
+    proba = pipeline.predict_proba(test[cols])
+    assert len(proba) == len(test), (
+        f"scored {len(proba)} rows for {len(test)} inputs - the sampler leaked into predict"
+    )
+
+
+def test_pipeline_without_sampler_stays_on_sklearn():
+    pipeline = build_pipeline(NUMERIC_COLS, CATEGORICAL_COLS)
+    assert "sampler" not in pipeline.named_steps
+    assert type(pipeline).__module__.startswith("sklearn")
