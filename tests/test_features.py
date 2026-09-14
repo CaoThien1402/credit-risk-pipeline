@@ -14,6 +14,7 @@ import pytest
 from model.features import (
     ID_COLS,
     LEAKAGE_COLS,
+    ML_FEATURES_COLUMNS,
     NOMINAL_CATEGORICAL_COLS,
     ORDINAL_CATEGORICAL_COLS,
     PROTECTED_ATTRIBUTE_COLS,
@@ -21,17 +22,6 @@ from model.features import (
     get_feature_columns,
     split_numeric_categorical,
 )
-
-# Column list of the ml_features view (sql/views.sql). Kept here rather than queried so
-# the test runs in CI, which has no Postgres service.
-ML_FEATURES_COLUMNS = [
-    "loan_id", "client_id", "loan_intent", "loan_grade", "loan_amnt", "loan_int_rate",
-    "loan_percent_income", "debt_to_income_ratio", "loan_status", "age", "income",
-    "home_ownership", "emp_length", "default_on_file", "cred_hist_length",
-    "credit_utilization_ratio", "past_delinquencies", "country", "loan_term_months",
-    "other_debt", "gender", "marital_status", "education_level", "employment_type",
-    "open_accounts",
-]
 
 # Columns the database stores as text/char. StandardScaler raises
 # "could not convert string to float" on any of these.

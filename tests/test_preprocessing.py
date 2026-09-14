@@ -109,13 +109,32 @@ def test_unseen_category_does_not_crash_prediction():
 # the damage is already baked into the data handed to fit(). The only reliable signal is
 # the order the calls appear in the notebook source.
 
+import glob
 import json
 import re
 
-NOTEBOOK = os.path.join(os.path.dirname(__file__), "..", "notebooks", "02_baseline_model.ipynb")
+NOTEBOOK_DIR = os.path.join(os.path.dirname(__file__), "..", "notebooks")
 
 FIT_CALL = re.compile(r"\.fit(?:_transform)?\s*\(")
 SPLIT_CALL = re.compile(r"train_test_split\s*\(")
+
+
+def _all_notebooks():
+    """Every notebook, discovered - not an explicit allowlist.
+
+    The alternative (a hardcoded list of notebooks expected to have this discipline) was
+    rejected: its failure mode is that a new training notebook is silently never checked,
+    and this repo has been bitten by exactly that pattern before - session 8's leakage
+    scan hardcoded 5 categorical columns and silently skipped the 7 added to the view
+    later, and the README file tree went stale the same way. Discovery means any notebook
+    is covered the moment it gains a train_test_split.
+
+    The cost is that notebooks with no split (01_eda.ipynb) must be skipped rather than
+    failed. Skipping is itself silent, so the test is parametrized per notebook: `pytest
+    -v` prints one line per file, and a skip shows up by name with its reason instead of
+    disappearing.
+    """
+    return sorted(glob.glob(os.path.join(NOTEBOOK_DIR, "*.ipynb")))
 
 
 def _code_lines(notebook_path):
@@ -133,10 +152,14 @@ def _code_lines(notebook_path):
     return out
 
 
-def test_notebook_does_not_fit_before_train_test_split():
-    lines = _code_lines(NOTEBOOK)
+@pytest.mark.parametrize(
+    "notebook_path", _all_notebooks(), ids=lambda p: os.path.basename(p)
+)
+def test_notebook_does_not_fit_before_train_test_split(notebook_path):
+    lines = _code_lines(notebook_path)
     split_positions = [i for i, (_, _, code) in enumerate(lines) if SPLIT_CALL.search(code)]
-    assert split_positions, "no train_test_split call found in the training notebook"
+    if not split_positions:
+        pytest.skip("no train_test_split - not a training notebook, nothing to order")
     first_split = split_positions[0]
 
     premature = [

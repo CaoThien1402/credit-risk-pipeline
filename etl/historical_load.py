@@ -21,8 +21,6 @@ def clean_outliers(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[df["person_age"] > 100, "person_age"] = np.nan
     bad_emp = df["person_emp_length"] > (df["person_age"] - 14)
     df.loc[bad_emp, "person_emp_length"] = np.nan
-    # TODO: decide the long-term imputation strategy (median vs. KNN) during EDA —
-    # this only caps outliers, it doesn't impute them.
     return df
 
 
