@@ -5,6 +5,20 @@ EDA (notebooks/01_eda.ipynb) and are documented in CLAUDE.md / docs/MEMORY.md. N
 in this file is new analysis - it's just applying that already-made decision.
 """
 
+# The ml_features view's SELECT list (sql/views.sql), in view order. Single source of
+# truth: tests/test_features.py and tests/test_views.py both import this rather than
+# keeping their own copies, which previously drifted apart with nothing enforcing a
+# match. test_views.py asserts this equals the live view's columns, so an edit to
+# sql/views.sql that isn't reflected here fails CI rather than passing quietly.
+ML_FEATURES_COLUMNS = (
+    "loan_id", "client_id", "loan_intent", "loan_grade", "loan_amnt", "loan_int_rate",
+    "loan_percent_income", "debt_to_income_ratio", "loan_status", "age", "income",
+    "home_ownership", "emp_length", "default_on_file", "cred_hist_length",
+    "credit_utilization_ratio", "past_delinquencies", "country", "loan_term_months",
+    "other_debt", "gender", "marital_status", "education_level", "employment_type",
+    "open_accounts",
+)
+
 ID_COLS = ["loan_id", "client_id"]
 TARGET_COL = "loan_status"
 

@@ -13,25 +13,26 @@ constraints are true in both.
 import os
 import sys
 
+# etl/ for config, repo root for model/ - both needed. The repo-root entry is what makes
+# `from model.features import ...` below resolve; without it this module fails at import
+# time, which is a collection error, not a skip (the no-Postgres skip lives in the engine
+# fixture and never gets a chance to run).
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "etl"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from sqlalchemy import inspect, text
 
 from config import get_engine
+from model.features import ML_FEATURES_COLUMNS
 
 EXPECTED_TABLES = {"cities", "customers", "credit_bureau", "loans"}
 
-# sql/views.sql's ml_features SELECT list. Kept here (not queried from information_schema
-# in a loop) so a diff against this set is readable in a failure message.
-ML_FEATURES_COLUMNS = {
-    "loan_id", "client_id", "loan_intent", "loan_grade", "loan_amnt", "loan_int_rate",
-    "loan_percent_income", "debt_to_income_ratio", "loan_status", "age", "income",
-    "home_ownership", "emp_length", "default_on_file", "cred_hist_length",
-    "credit_utilization_ratio", "past_delinquencies", "country", "loan_term_months",
-    "other_debt", "gender", "marital_status", "education_level", "employment_type",
-    "open_accounts",
-}
+# model.features.ML_FEATURES_COLUMNS is a tuple in view order; these tests compare against
+# column sets from information_schema, so set() it here. Single source of truth - this
+# list used to be duplicated between here and test_features.py with nothing enforcing
+# that the two copies matched.
+EXPECTED_ML_FEATURES_COLUMNS = set(ML_FEATURES_COLUMNS)
 
 DASHBOARD_WINDOW_COLUMNS = {
     "avg_loan_amnt_by_age_bucket", "default_rate_by_grade", "util_rank_in_country",
@@ -60,7 +61,7 @@ def test_schema_has_exactly_four_tables(engine):
 
 
 def test_ml_features_has_exactly_the_documented_columns(engine):
-    assert _columns(engine, "ml_features") == ML_FEATURES_COLUMNS
+    assert _columns(engine, "ml_features") == EXPECTED_ML_FEATURES_COLUMNS
 
 
 def test_ml_features_excludes_the_dashboard_window_columns(engine):
@@ -72,7 +73,7 @@ def test_ml_features_excludes_the_dashboard_window_columns(engine):
 
 def test_dashboard_aggregates_adds_exactly_the_three_window_columns(engine):
     dashboard_cols = _columns(engine, "dashboard_aggregates")
-    assert dashboard_cols == ML_FEATURES_COLUMNS | DASHBOARD_WINDOW_COLUMNS
+    assert dashboard_cols == EXPECTED_ML_FEATURES_COLUMNS | DASHBOARD_WINDOW_COLUMNS
 
 
 def test_application_ref_is_the_unique_constraint_not_loan_id(engine):

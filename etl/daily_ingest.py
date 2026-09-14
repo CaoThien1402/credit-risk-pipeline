@@ -1,4 +1,11 @@
-"""Simulate 50-100 new loan applications per day and upsert them into Postgres."""
+"""Simulate 50-100 new loan applications per day and upsert them into Postgres.
+
+"New application" means a new *loan*, not a new customer: sample_new_applications draws
+client_id with replacement from the existing historical loans, so every synthetic row is
+an already-known customer taking another loan. No new rows are ever added to customers or
+credit_bureau - only to loans. That also means a client_id can repeat within one day's
+batch, which is why application_ref hashes client_id + date rather than client_id alone.
+"""
 import sys
 import hashlib
 from datetime import date

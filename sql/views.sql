@@ -5,7 +5,7 @@
 -- identifier, a leakage column, or a dashboard-only aggregate (see CLAUDE.md) — gender,
 -- marital_status, education_level, employment_type, open_accounts, other_debt, and
 -- loan_term_months were missing from the original buổi 6-7 CTE despite being 100%
--- populated in the real data; added here so session 9's feature set isn't short 6 columns
+-- populated in the real data; added here so session 9's feature set isn't short 7 columns
 -- the plan explicitly calls for.
 CREATE OR REPLACE VIEW ml_features AS
 SELECT
