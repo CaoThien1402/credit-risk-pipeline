@@ -306,6 +306,97 @@ so the record of who derived what stays honest).
   0.8027 ± 0.0094. Every holdout number in this project agrees with its shuffled CV mean
   to within ~0.002, so the holdout split is representative.
 
+## 2026-09-15 — session 12: SHAP + model bundles
+
+- `notebooks/05_explainability_and_bundles.ipynb`: refits `portfolio` and
+  `at_application` XGBoost (session 10/11 architecture, `scale_pos_weight` recomputed on
+  the full dataset since it's now what's being fit) on all 32,581 historical rows, per
+  the user's explicit choice — asked directly rather than decided unilaterally, since it
+  changes which object app.py eventually loads. `metrics` in each bundle is pinned from
+  the session 10/11 holdout evaluation (`at_application`: ROC-AUC 0.8907/PR-AUC 0.8055;
+  `portfolio`: 0.9372/0.8846) rather than recomputed on the refit model, which has now
+  seen every row and would score itself optimistically on former test rows.
+- Needed `matplotlib` to run `shap.summary_plot`/`shap.force_plot`
+  (`shap.__init__.py`'s plotting functions raise `ImportError` without it — confirmed
+  directly, not assumed). Added as a **main** dependency, not dev-only: `app.py` will
+  call the same SHAP plotting functions at runtime in session 13-14, not just here.
+- SHAP `TreeExplainer` runs on the **transformed** matrix
+  (`preprocessor.transform(...)`, one-hot expanded — 18 raw `at_application` columns
+  become 35), not the raw `feature_names` list. Top 5 by mean |SHAP|:
+  `loan_percent_income` (0.702), `income` (0.594), `home_ownership_RENT` (0.381),
+  `default_on_file_N` (0.348), `home_ownership_OWN` (0.237). `home_ownership` appearing
+  twice is one-hot doing its job — importance is split across the category's dummy
+  columns, so the underlying feature's total importance is actually the sum.
+- `bundle["preprocessor"]` = `pipeline.named_steps["preprocessor"]` (the `ColumnTransformer`
+  alone), `bundle["model"]` = `pipeline.named_steps["classifier"]` (bare `XGBClassifier`),
+  not the whole fitted `Pipeline` object — matches the plan's explicit wording
+  ("preprocessor là chính ColumnTransformer này") and `app.py`'s existing docstring
+  contract (transform then predict as two calls).
+- Verified beyond "the file was written": loaded each `.pkl` back in a separate step,
+  ran `validate_bundle()`, and pushed a real row through
+  `preprocessor.transform → model.predict_proba` for both bundles — got 0.9897 and
+  0.9946 P(default) on the same sample row, both bundles round-tripped correctly.
+  `models/*.pkl` confirmed still gitignored (`git status` shows neither file).
+- `tests/test_preprocessing.py`'s notebook-ordering guard (added session 9, extended to
+  glob-discover every notebook in the coverage-gap review) correctly **skips**
+  `05_explainability_and_bundles.ipynb` — it has no `train_test_split` at all, by design
+  (this notebook fits on the full dataset, not a held-out split), so there's no ordering
+  to guard. Confirmed this is a skip, not a false pass: the guard's skip condition is
+  "no `train_test_split` found," which is true here for the right reason.
+
+## 2026-09-15 — session 12 review: 4 real gaps found and fixed, not just narrated
+
+A follow-up review checked session 12's claims against actual numbers instead of
+re-reading the notebook, using the same class of trap as the fit-before-split check:
+code that looks correct from its shape but is wrong in a way only a concrete check
+catches. Findings, all fixed in the same pass:
+
+- **CV had never been run for `portfolio`, anywhere.** `03_xgboost_model.ipynb` has zero
+  `cross_val_score` calls (a markdown cell asserted a CV number in prose without any
+  code computing it); `04_smote_comparison.ipynb`'s CV loop is scoped to
+  `at_application` only (`cols = get_feature_columns(df.columns, "at_application")` at
+  the top of that notebook). README's own results table already had "—" in portfolio's
+  CV column, documenting the gap rather than hiding it, but session 12's bundle
+  shouldn't have shipped without fixing it.
+- **`bundle["metrics"]` stored the session 10/11 holdout numbers (0.890672/0.805474),
+  not a CV mean, and the fix is not "make it 0.8606"** — 0.8606 was 2026-09-13's
+  retracted unshuffled `cv=5` result. Computed real 5-fold `StratifiedKFold(shuffle=True)`
+  CV for BOTH feature sets in `05_explainability_and_bundles.ipynb`: portfolio ROC
+  0.9370 ± 0.0035 / PR 0.8858 ± 0.0065, at_application ROC 0.8928 ± 0.0045 / PR
+  0.8032 ± 0.0090. Sanity-checked against the holdout numbers (gaps 0.0002-0.0023,
+  asserted `< 0.02`) — they agree closely, which is itself evidence neither figure was a
+  fluke. Bundle now stores the CV mean as `metrics["roc_auc"]`/`["pr_auc"]`, keeps the
+  holdout numbers under `metrics["holdout_roc_auc"]`/`["holdout_pr_auc"]` for
+  cross-reference, and documents the method as `metrics["method"]` (plain text) so a
+  reader of the bundle alone — not just the notebook — can tell how the numbers were
+  derived.
+- **The refit-on-100%-historical claim was true but only checked by eye once.** Made it
+  durable: `model/bundle.py::validate_bundle()` gained a `trained_on_n_rows` required
+  key and an optional `expected_n_rows` parameter that raises if they don't match.
+  `notebooks/05_explainability_and_bundles.ipynb` now captures the row count at the
+  exact `.fit()` call (not derived from `df.shape` separately, to avoid a check that's
+  circular against its own input) and independently re-queries
+  `SELECT COUNT(*) FROM ml_features` in a fresh round-trip before saving, so a future
+  bug that fits on a filtered/subset frame while `df` still looks full would be caught.
+  New `tests/test_model_bundles.py` loads the real `.pkl` files (skips if absent — never
+  runs in CI, since `models/*.pkl` is gitignored) and checks `trained_on_n_rows` against
+  a live count, plus a round-trip prediction through `preprocessor.transform` →
+  `model.predict_proba`.
+- **The agreed SHAP-vs-session-8-noise-columns cross-check didn't actually exist in the
+  notebook** — only asserted in this file's prose. Added a real cell: mean |SHAP| for
+  `past_delinquencies`/`open_accounts`/`credit_utilization_ratio` is 0.0056/0.0194/0.0319
+  (ranks 23rd/19th/16th of 35 transformed features), against the top feature's 0.7021 —
+  confirms the model isn't leaning on the columns session 8 found to be noise.
+- Two things checked and found to already be correct, cited for completeness:
+  hyperparameters in the refit call (`n_estimators=300, max_depth=4, learning_rate=0.05`)
+  match `03_xgboost_model.ipynb`'s literal values exactly; `validate_bundle()` is called
+  before `joblib.dump()` in the same loop iteration, not after.
+- Process note: the patch script that applied these notebook edits set `outputs: []` on
+  markdown cells (invalid per nbformat schema — markdown cells don't have an `outputs`
+  key at all) and `nbconvert` correctly refused to load the file until that was fixed.
+  Caught by running `nbformat.validate()` rather than assuming the patch worked because
+  `nbconvert` produced a file without a Python traceback.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.

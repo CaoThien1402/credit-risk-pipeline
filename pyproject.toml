@@ -17,6 +17,7 @@ dependencies = [
     "openpyxl",
     "joblib",
     "python-dotenv",
+    "matplotlib>=3.11.2",
 ]
 
 [dependency-groups]
