@@ -16,6 +16,7 @@ def _valid_bundle():
         "feature_names": ["age", "income"],
         "trained_at": "2026-09-12T10:00:00",
         "metrics": {"roc_auc": 0.81, "pr_auc": 0.55},
+        "trained_on_n_rows": 32581,
     }
 
 
@@ -23,7 +24,10 @@ def test_valid_bundle_passes():
     validate_bundle(_valid_bundle())
 
 
-@pytest.mark.parametrize("missing_key", ["model", "preprocessor", "feature_names", "trained_at", "metrics"])
+@pytest.mark.parametrize(
+    "missing_key",
+    ["model", "preprocessor", "feature_names", "trained_at", "metrics", "trained_on_n_rows"],
+)
 def test_missing_key_rejected(missing_key):
     bundle = _valid_bundle()
     del bundle[missing_key]
@@ -57,3 +61,36 @@ def test_incomplete_metrics_rejected():
 def test_non_dict_rejected():
     with pytest.raises(ValueError, match="must be a dict"):
         validate_bundle(["model", "preprocessor"])
+
+
+@pytest.mark.parametrize("bad_value", [0, -1, "32581", None, 3.5, True])
+def test_trained_on_n_rows_must_be_a_positive_int(bad_value):
+    bundle = _valid_bundle()
+    bundle["trained_on_n_rows"] = bad_value
+    with pytest.raises(ValueError, match="trained_on_n_rows"):
+        validate_bundle(bundle)
+
+
+def test_trained_on_n_rows_mismatch_against_expected_is_rejected():
+    """The check this exists for: a bundle that claims a row count different from an
+    independently-known true count - e.g. a bundle accidentally saved from a
+    train/test-split model (~26,064 rows) instead of the full historical dataset
+    (32,581 rows)."""
+    bundle = _valid_bundle()
+    bundle["trained_on_n_rows"] = 26064
+    with pytest.raises(ValueError, match="26064.*32581|32581.*26064"):
+        validate_bundle(bundle, expected_n_rows=32581)
+
+
+def test_trained_on_n_rows_match_against_expected_passes():
+    bundle = _valid_bundle()
+    bundle["trained_on_n_rows"] = 32581
+    validate_bundle(bundle, expected_n_rows=32581)
+
+
+def test_expected_n_rows_not_checked_when_omitted():
+    """Callers that don't know the true count (e.g. a pure unit test with no DB) can
+    still validate everything else."""
+    bundle = _valid_bundle()
+    bundle["trained_on_n_rows"] = 999
+    validate_bundle(bundle)  # no expected_n_rows given - must not raise

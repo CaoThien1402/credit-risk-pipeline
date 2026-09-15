@@ -4,7 +4,7 @@ Credit risk & loan approval pipeline: Excel → PostgreSQL (4 normalized tables)
 
 Project memory (facts learned the hard way, dated): `docs/MEMORY.md`. Read it when picking up work on this repo.
 
-**Stack**: Python 3.14 (via `uv`, `.venv/`), PostgreSQL 16 (Docker), SQLAlchemy 2.x, scikit-learn, XGBoost, SHAP, Streamlit, Plotly. Dev-only deps (`uv add --dev`, not in main deps): `pytest`, `jupyter`, `kaleido` (static PNG export from Plotly figures).
+**Stack**: Python 3.14 (via `uv`, `.venv/`), PostgreSQL 16 (Docker), SQLAlchemy 2.x, scikit-learn, XGBoost, SHAP, matplotlib, Streamlit, Plotly. `matplotlib` is a main dependency, not dev-only — `shap`'s plotting functions require it, and `app.py` will need it too for the session 13-14 SHAP force plots at runtime, not just in notebooks. Dev-only deps (`uv add --dev`, not in main deps): `pytest`, `jupyter`, `kaleido` (static PNG export from Plotly figures).
 
 ## Structure
 
@@ -18,19 +18,26 @@ data/      Credit_Risk_Dataset.xlsx — committed to the repo (not gitignored)
 notebooks/ 01_eda.ipynb, 02_baseline_model.ipynb (session 9, Logistic Regression
            baseline), 03_xgboost_model.ipynb (session 10, XGBoost + scale_pos_weight),
            04_smote_comparison.ipynb (session 11, SMOTE vs scale_pos_weight),
-           figures/ (PNGs exported for the README, via kaleido)
+           05_explainability_and_bundles.ipynb (session 12, SHAP + saves models/*.pkl —
+           refits both models on the FULL historical dataset, not the train split; see
+           Critical constraints), figures/ (PNGs exported for the README, via kaleido)
 model/     features.py (column bookkeeping: ID/target/leakage/protected-attribute cols,
            categorical lists), preprocessing.py (ColumnTransformer shared by every
-           session; build_pipeline(..., estimator=...) — defaults to session 9's
-           Logistic Regression, session 10+ pass XGBoost/other estimators through this
-           same parameter rather than rebuilding the ColumnTransformer), bundle.py
-           (validates the model-bundle contract app/utils.py depends on)
-models/    *.pkl joblib bundles — gitignored, not committed
+           session; build_pipeline(..., estimator=..., sampler=...) — defaults to
+           session 9's Logistic Regression, session 10+ pass XGBoost/other estimators
+           through this same parameter rather than rebuilding the ColumnTransformer),
+           bundle.py (validates the model-bundle contract app/utils.py depends on)
+models/    at_application_model.pkl, portfolio_risk_model.pkl — gitignored, not
+           committed. Built by notebooks/05_explainability_and_bundles.ipynb; re-run it
+           to regenerate after a fresh clone or an ETL/schema change
 app/       app.py (Streamlit, 2 tabs), utils.py
 tests/     pytest — etl/ function tests, model/ column-split + preprocessing-discipline
-           tests, bundle-contract tests, and SQL structural tests (test_views.py,
-           needs a reachable Postgres — skips otherwise; CI's postgres service and
-           schema.sql/views.sql apply step make it always run there)
+           tests, bundle-contract tests (test_bundle.py, pure unit tests), SQL
+           structural tests (test_views.py, needs a reachable Postgres — skips
+           otherwise; CI's postgres service and schema.sql/views.sql apply step make it
+           always run there), and model-bundle integration tests (test_model_bundles.py
+           — needs BOTH Postgres and the actual models/*.pkl files, so it only ever
+           runs locally after regenerating them; never in CI, since *.pkl is gitignored)
 scripts/   dump_db.sh — snapshots the running DB into db-seed/
 db-seed/   01_seed.sql — mounted at /docker-entrypoint-initdb.d, Postgres auto-loads it
            on an empty volume; refresh via scripts/dump_db.sh after changing the data
@@ -58,6 +65,7 @@ uv run jupyter nbconvert --to notebook --execute --inplace notebooks/01_eda.ipyn
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_baseline_model.ipynb
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/03_xgboost_model.ipynb
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/04_smote_comparison.ipynb
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/05_explainability_and_bundles.ipynb   # regenerates models/*.pkl
 streamlit run app/app.py
 ```
 
@@ -84,6 +92,12 @@ streamlit run app/app.py
 **Cross-validate with `StratifiedKFold(shuffle=True, random_state=...)`, never bare `cv=5`.** `cross_val_score(..., cv=5)` splits without shuffling, and this dataset's row order is not random with respect to the target — default rate across five contiguous blocks of `ml_features` runs 27.8%, 19.1%, 24.3%, 18.0%, 20.0% (the view has no `ORDER BY`, so rows arrive in insertion order ≈ the original spreadsheet's order). Unshuffled folds therefore measure the table's ordering, not the model. This already produced one wrong published conclusion: session 10 reported XGBoost at 0.8606 ± 0.0355 and called it unstable; shuffled it is 0.8923 ± 0.0048, tighter than the Logistic Regression baseline. Numbers in `docs/MEMORY.md`.
 
 **SMOTE lost to `scale_pos_weight` and is not used in the shipped model** (session 11: PR-AUC 0.8055 vs 0.7796, non-overlapping fold ranges). If a sampler is reintroduced it must go through `build_pipeline(..., sampler=...)`, which switches to `imblearn.pipeline.Pipeline` — an imblearn Pipeline runs the sampler only during `fit` and bypasses it at `predict`, so synthetic rows never reach the data being scored. A sampler placed in a plain sklearn Pipeline would resample at predict time too, which silently inflates every metric.
+
+**`models/*.pkl` are refit on the FULL historical dataset (32,581 rows), not the session 10/11 train split (~26,064 rows) — verified by `bundle["trained_on_n_rows"]`, not just asserted.** (User-confirmed decision, 2026-09-15.) `model/bundle.py::validate_bundle(bundle, expected_n_rows=...)` rejects a bundle whose row count doesn't match an independently-supplied count; `tests/test_model_bundles.py` calls it with a live `SELECT COUNT(*) FROM ml_features`, and `notebooks/05_explainability_and_bundles.ipynb` re-queries that count itself (not reusing the `df` already used to fit) before saving, specifically to catch a bundle silently built from a train-split model. The train/test split exists to produce an honest, unbiased performance estimate; once that estimate is recorded, refitting the same architecture/hyperparameters on every available row is strictly better than leaving 20% of real historical outcomes unused in the shipped model.
+
+**`bundle["metrics"]` stores a 5-fold `StratifiedKFold(shuffle=True)` cross-validation mean, not the session 10/11 single-split holdout number.** Both feature sets are cross-validated inside `05_explainability_and_bundles.ipynb` itself — `portfolio` had no CV number anywhere before this notebook (session 10-11 only ever cross-validated `at_application`), and shipping a CV number for one feature set and a holdout number for the other would be an inconsistency, not a design choice. The holdout figures are kept in the bundle too, under `metrics["holdout_roc_auc"]`/`["holdout_pr_auc"]`, for cross-reference only — `metrics["roc_auc"]`/`["pr_auc"]` are always the CV means. `metrics["method"]` is a plain-text string describing exactly how the numbers were derived, so the method travels with the artifact and doesn't have to be reconstructed from notebook prose later. None of these numbers are computed by scoring the refit model against its own training rows — that would be training-into-test contamination and dishonestly optimistic. If you retrain, keep computing metrics from real cross-validation or a real held-out split — don't "fix" this by measuring the shipped model against data it has seen.
+
+**`bundle["preprocessor"]` is the fitted `ColumnTransformer` alone, not the whole `Pipeline`, and `bundle["feature_names"]` is the raw pre-one-hot column list, not the SHAP-expanded names.** `app.py` (sessions 13-16) must call `preprocessor.transform(raw_input)` then `model.predict_proba(...)` as two explicit steps — the plan says the bundle's preprocessor "is literally this ColumnTransformer." SHAP in session 12 operates on `preprocessor.get_feature_names_out()` (one-hot-expanded), which is a different, longer list than `bundle["feature_names"]` (what the Streamlit form collects). Don't conflate the two when building the session 13 form.
 
 **Session 9+ preprocessing goes through `model/preprocessing.py::build_pipeline`, never hand-rolled per notebook.** `StandardScaler` for numerics and `OneHotEncoder` (not `LabelEncoder` — it implies order and distance a linear model will misread) for categoricals, both inside one `ColumnTransformer`, so `Pipeline.fit(X_train, ...)` after `train_test_split` is the only thing that ever fits them. Fitting on the full dataset first leaks test-set statistics into training and leaves no trace in the fitted object — `tests/test_preprocessing.py::test_notebook_does_not_fit_before_train_test_split` guards the ordering at notebook-source level, because a pipeline-level assertion provably cannot catch it (`ColumnTransformer.fit` clones and re-fits its transformers, discarding any pre-fitted state). `build_pipeline(numeric_cols, categorical_cols, estimator=...)` — session 10's XGBoost passes its own estimator through this parameter rather than rebuilding the `ColumnTransformer`; don't copy-paste the transformer setup into a new file when adding a model, or preprocessing has two sources of truth. Session 12 saves the fitted `ColumnTransformer` as `preprocessor` in the model bundle. `OneHotEncoder` uses `handle_unknown="ignore"` so the session 13 form can't crash the app on a category absent from training data — see the rationale comment in the file before changing it.
 
