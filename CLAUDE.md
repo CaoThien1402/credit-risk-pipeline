@@ -20,17 +20,24 @@ notebooks/ 01_eda.ipynb, 02_baseline_model.ipynb (session 9, Logistic Regression
            04_smote_comparison.ipynb (session 11, SMOTE vs scale_pos_weight),
            05_explainability_and_bundles.ipynb (session 12, SHAP + saves models/*.pkl —
            refits both models on the FULL historical dataset, not the train split; see
-           Critical constraints), figures/ (PNGs exported for the README, via kaleido)
+           Critical constraints), 06_decision_threshold.ipynb (session 13 prep — derives
+           model/threshold.py::DECISION_THRESHOLD from real portfolio economics, not 0.5;
+           see Critical constraints), figures/ (PNGs exported for the README, via kaleido)
 model/     features.py (column bookkeeping: ID/target/leakage/protected-attribute cols,
            categorical lists), preprocessing.py (ColumnTransformer shared by every
            session; build_pipeline(..., estimator=..., sampler=...) — defaults to
            session 9's Logistic Regression, session 10+ pass XGBoost/other estimators
            through this same parameter rather than rebuilding the ColumnTransformer),
-           bundle.py (validates the model-bundle contract app/utils.py depends on)
+           bundle.py (validates the model-bundle contract app/utils.py depends on),
+           threshold.py (DECISION_THRESHOLD=0.53, the approve/reject cutoff app.py
+           applies to at_application_model's predict_proba — see Critical constraints)
 models/    at_application_model.pkl, portfolio_risk_model.pkl — gitignored, not
            committed. Built by notebooks/05_explainability_and_bundles.ipynb; re-run it
            to regenerate after a fresh clone or an ETL/schema change
-app/       app.py (Streamlit, 2 tabs), utils.py
+app/       app.py (Streamlit, 2 tabs — Tab 1 "New Application Prediction" is built:
+           form -> at_application_model.pkl -> DECISION_THRESHOLD -> Approve/Reject +
+           P(default); SHAP top-3 reasons is session 14, not yet built. Tab 2 still
+           TODO, session 15-16), utils.py (load_model_bundle)
 tests/     pytest — etl/ function tests, model/ column-split + preprocessing-discipline
            tests, bundle-contract tests (test_bundle.py, pure unit tests), SQL
            structural tests (test_views.py, needs a reachable Postgres — skips
@@ -66,6 +73,7 @@ uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_baseline
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/03_xgboost_model.ipynb
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/04_smote_comparison.ipynb
 uv run jupyter nbconvert --to notebook --execute --inplace notebooks/05_explainability_and_bundles.ipynb   # regenerates models/*.pkl
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/06_decision_threshold.ipynb           # re-derives model/threshold.py's cutoff; re-run if the model or its data changes
 streamlit run app/app.py
 ```
 
@@ -96,6 +104,8 @@ streamlit run app/app.py
 **`models/*.pkl` are refit on the FULL historical dataset (32,581 rows), not the session 10/11 train split (~26,064 rows) — verified by `bundle["trained_on_n_rows"]`, not just asserted.** (User-confirmed decision, 2026-09-15.) `model/bundle.py::validate_bundle(bundle, expected_n_rows=...)` rejects a bundle whose row count doesn't match an independently-supplied count; `tests/test_model_bundles.py` calls it with a live `SELECT COUNT(*) FROM ml_features`, and `notebooks/05_explainability_and_bundles.ipynb` re-queries that count itself (not reusing the `df` already used to fit) before saving, specifically to catch a bundle silently built from a train-split model. The train/test split exists to produce an honest, unbiased performance estimate; once that estimate is recorded, refitting the same architecture/hyperparameters on every available row is strictly better than leaving 20% of real historical outcomes unused in the shipped model.
 
 **`bundle["metrics"]` stores a 5-fold `StratifiedKFold(shuffle=True)` cross-validation mean, not the session 10/11 single-split holdout number.** Both feature sets are cross-validated inside `05_explainability_and_bundles.ipynb` itself — `portfolio` had no CV number anywhere before this notebook (session 10-11 only ever cross-validated `at_application`), and shipping a CV number for one feature set and a holdout number for the other would be an inconsistency, not a design choice. The holdout figures are kept in the bundle too, under `metrics["holdout_roc_auc"]`/`["holdout_pr_auc"]`, for cross-reference only — `metrics["roc_auc"]`/`["pr_auc"]` are always the CV means. `metrics["method"]` is a plain-text string describing exactly how the numbers were derived, so the method travels with the artifact and doesn't have to be reconstructed from notebook prose later. None of these numbers are computed by scoring the refit model against its own training rows — that would be training-into-test contamination and dishonestly optimistic. If you retrain, keep computing metrics from real cross-validation or a real held-out split — don't "fix" this by measuring the shipped model against data it has seen.
+
+**`app.py` rejects at `predict_proba >= model/threshold.py::DECISION_THRESHOLD` (0.53), not 0.5.** (User-confirmed decision, 2026-09-17/18.) `build_pipeline`'s `scale_pos_weight` (session 10) shifts `predict_proba`'s scores away from true probabilities as a side effect of correcting the ~21.8% base rate — verified directly in `notebooks/06_decision_threshold.ipynb`: at a predicted score of ~0.50, the real default rate in that bin is only ~24%, not 50%. Any formula that treats the raw score as a calibrated probability (including the textbook `t* = C_FP/(C_FP+C_FN)` cost formula) will therefore recommend the wrong cutoff. `DECISION_THRESHOLD` was instead found empirically: sweep every cutoff against the session 9-11 held-out test set and pick the one minimizing real expected cost, priced from each row's own `loan_amnt`/`loan_int_rate`/`loan_term_months` (`loan_int_rate` is used only to price historical outcomes after the fact here — it never reaches the model as an input, so this doesn't reopen the session 8-9 leakage question). 0.53 beat three alternatives also computed in that notebook (naive 0.5, Youden's J, F1-max, a recall≥90% policy target) on real-dollar cost per applicant, and is stable under the one real assumption behind it (0% vs 20-40% recovery on default moves it only to 0.565). If the model is retrained, re-run `06_decision_threshold.ipynb` before assuming 0.53 still holds.
 
 **`bundle["preprocessor"]` is the fitted `ColumnTransformer` alone, not the whole `Pipeline`, and `bundle["feature_names"]` is the raw pre-one-hot column list, not the SHAP-expanded names.** `app.py` (sessions 13-16) must call `preprocessor.transform(raw_input)` then `model.predict_proba(...)` as two explicit steps — the plan says the bundle's preprocessor "is literally this ColumnTransformer." SHAP in session 12 operates on `preprocessor.get_feature_names_out()` (one-hot-expanded), which is a different, longer list than `bundle["feature_names"]` (what the Streamlit form collects). Don't conflate the two when building the session 13 form.
 

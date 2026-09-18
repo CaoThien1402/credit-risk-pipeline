@@ -397,6 +397,55 @@ catches. Findings, all fixed in the same pass:
   Caught by running `nbformat.validate()` rather than assuming the patch worked because
   `nbconvert` produced a file without a Python traceback.
 
+## 2026-09-18 — session 13: decision threshold + prediction form
+
+- **Threshold derivation (`notebooks/06_decision_threshold.ipynb`)**: checked
+  `predict_proba`'s calibration before trusting any formula on it — badly miscalibrated
+  (mean predicted 0.36 vs actual base rate 0.22; at predicted ~0.50 the real bin default
+  rate is ~24%, not 50%), caused by `scale_pos_weight`. This ruled out the textbook
+  Bayes-optimal formula `t* = C_FP/(C_FP+C_FN)` (would have recommended **0.267** —
+  verifiably wrong, kept in the notebook only to show how wrong). Instead swept every
+  cutoff empirically against the session 9-11 held-out test set (6,517 rows, never used
+  to fit the shipped model), pricing each row's own `loan_amnt`/`loan_int_rate`/
+  `loan_term_months`: cost of a missed default (FN) ≈ `loan_amnt` (recovery=0%,
+  conservative — no collections data in this dataset to measure a real rate), cost of a
+  wrongly rejected good applicant (FP) ≈ `loan_amnt × loan_int_rate × loan_term_years`
+  (simple interest, no discounting). `loan_int_rate` used only to price historical
+  outcomes after the fact — never reaches the model, so this doesn't reopen leakage.
+  Result: `DECISION_THRESHOLD = 0.53` (avg cost $721/applicant), stable under the
+  recovery-rate assumption (20-40% recovery moves it to 0.565 only). Compared against 4
+  alternatives on the same held-out set, all worse on real cost: naive 0.5 ($743, happens
+  to be close only because this dataset's economics land there, not because 0.5 means
+  anything), Youden's J ($761, treats both error types as equally costly), F1-max ($736,
+  same issue, coincidentally close to cost-min here), recall≥90% policy target ($1,006 —
+  worst of all five, rejects far more good applicants than the economics justify).
+- `model/threshold.py` created as the single source of truth for `DECISION_THRESHOLD`
+  (0.53), imported by `app/app.py`. `tests/test_threshold.py` is a minimal sanity guard
+  (0 < threshold < 1) — the real validation lives in the notebook.
+- `app/app.py` Tab 1 built: 18-field form (from `bundle["feature_names"]`, so it can
+  never accidentally include `loan_grade`/`loan_int_rate` — they're structurally absent
+  from that list, not just omitted by convention), real categorical options and numeric
+  ranges queried directly from `ml_features` (not guessed), a form-level check mirroring
+  `schema.sql`'s `emp_length <= age - 14` CHECK constraint, decision + P(default) +
+  an expander explaining the threshold choice. SHAP top-3 reasons deliberately left as a
+  TODO for session 14, not built here.
+- **Verified in an actual browser, not just headlessly.** No project-specific run-skill
+  existed yet; `chromium-cli` wasn't available on this machine either, so fell back to a
+  hand-rolled Playwright (Node, via `npx`) driver script. Confirmed: form loads with real
+  defaults, submitting produces a decision, both branches render (`st.success` green for
+  APPROVE at 23.3% and 32.7% P(default), `st.error` red for REJECT at 99.2%), the
+  threshold-explanation expander opens with the expected text, zero browser console
+  errors. One false alarm during testing: an early screenshot appeared to cut off the
+  result before it rendered — turned out to be the test script screenshotting too soon
+  after the click, not a bug in the app; confirmed by re-checking with a longer wait and
+  by reading `body.innerText()` directly rather than trusting the screenshot alone.
+- Headless sanity check before touching the browser at all: 3 concrete profiles (plan's
+  buổi 13 explicitly asks for this) — low-risk (age 35, income 90k, no delinquencies) →
+  3.8% → APPROVE; high-risk (age 22, income 25k, `default_on_file=Y`, utilization 92%) →
+  99.4% → REJECT; a roughly-median profile → 27.4% → APPROVE (below the 0.53 cutoff even
+  though above the 21.8% base rate — expected, since the threshold was deliberately set
+  above the naive base rate to account for the FN/FP cost asymmetry).
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.
