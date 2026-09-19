@@ -480,6 +480,56 @@ catches. Findings, all fixed in the same pass:
   The last full run with Docker up (before this session's app.py-only changes) was
   69 passed / 2 skipped; re-run with Docker up before merging.
 
+### Session 15-16 (2026-09-19) — portfolio dashboard tab + session 13-14 hardening
+
+- **Tab 2 built**: 4 KPIs (32,581 loans / $312.4M disbursed / 21.8% default rate / 129
+  daily-stream rows) and 4 Plotly charts — monthly disbursement, default rate by grade,
+  default rate by country, scatter_geo by city (6 cities). Verified in a real browser:
+  4 `.js-plotly-plot` nodes, zero console errors.
+- **The overall default rate is weighted by grade volume**, not the mean of the 7
+  per-grade rates — grade G has 64 loans and grade A has 10,777, so an unweighted mean
+  would report a badly wrong portfolio rate.
+- **Two partial months, not one.** The data starts 2024-09-17 and ends 2026-09-06, so
+  the first AND last bars of the monthly chart are short for calendar reasons. Both are
+  annotated, detected from `MIN/MAX(loan_date)` per month rather than hardcoded.
+  `strftime("%-d")` is Linux-only and raises on Windows — build day numbers from
+  `.day` instead.
+- **Autoscaling was manufacturing a risk gap.** First version of the geo map spread a
+  20.5%–24.0% city range across the full red-green ramp, so cities looked
+  catastrophically different while the country chart right above it said geography
+  doesn't separate risk (0.13pp spread). Fixed `range_color=[0, 0.5]`; country chart
+  pins `yaxis_range=[0, 0.3]` and one flat colour instead of three loud hues for three
+  identical numbers. Caught by looking at the rendered screenshot, not by any test.
+- **`st.cache_data` on a no-arg loader ignores changes to SQL defined outside it.**
+  Editing a query left Streamlit serving the old DataFrame; the app then crashed with
+  `KeyError: 'first_day'` on a column the new SQL did select. Fixed by passing the
+  query in as an argument so it joins the cache key.
+- **DB-down path verified, not assumed**: with `docker compose stop`, Tab 1 still
+  scores an application (APPROVE, 3 SHAP rows) because it only needs the .pkl, and
+  Tab 2 shows a plain "Could not reach Postgres" message with no raw traceback.
+  `etl.config` is imported inside the loader, not at module scope, so the app starts
+  with no `.env` at all.
+- **Session 13-14 hardening done in the same pass**: `load_model_bundle` now calls
+  `validate_bundle` (a malformed bundle fails at startup, not mid-prediction — the
+  row-count check is deliberately left out here since it needs a live DB); the form is
+  built from `get_feature_columns(ML_FEATURES_COLUMNS, "at_application")` and
+  cross-checked against `bundle["feature_names"]`, verified equal against the real
+  bundle; SHAP explainer confirmed as approach (b), rebuilt from `bundle["model"]` at
+  startup rather than pickled into the bundle, so `REQUIRED_KEYS` is unchanged.
+- **Near-boundary test case (the one the plan asked for).** Found the real applicant
+  closest to P=0.50 by scoring all 32,581 rows: P=0.5000 → APPROVE (below the 0.53
+  cutoff), actual `loan_status=0`, so the model was right. Its top-3 exposed a genuine
+  bug class: the driver is transformed column `default_on_file_N` while the applicant
+  is `'Y'`, and reporting the column's own name would tell the officer the opposite of
+  the truth. The raw-value mapping handles it; browser and headless agree exactly
+  (+0.8933 / −0.8381 / +0.7498).
+- **`app/explanations.py` split out of `app.py`** so the mapping can be unit-tested in
+  CI — `app.py` loads the gitignored .pkl at import time and can't be imported there.
+  `tests/test_app_explanations.py` (5 tests) covers one-hot→raw mapping, the summing
+  of split categoricals, and cancellation of opposing one-hot contributions.
+- Full suite with Postgres up: **74 passed, 2 skipped** (was 69+2; +5 new tests, and
+  `test_model_bundles.py` runs now that the DB is reachable).
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.
