@@ -36,8 +36,11 @@ models/    at_application_model.pkl, portfolio_risk_model.pkl — gitignored, no
            to regenerate after a fresh clone or an ETL/schema change
 app/       app.py (Streamlit, 2 tabs — Tab 1 "New Application Prediction" is built:
            form -> at_application_model.pkl -> DECISION_THRESHOLD -> Approve/Reject +
-           P(default); SHAP top-3 reasons is session 14, not yet built. Tab 2 still
-           TODO, session 15-16), utils.py (load_model_bundle)
+           P(default), then (session 14) a "Why this prediction?" section: top-3 SHAP
+           reasons as an st.table + a matplotlib force plot. SHAP runs on the
+           one-hot-expanded transformed space, so describe_transformed_feature maps
+           names back to the raw field/value. Tab 2 still TODO, session 15-16),
+           utils.py (load_model_bundle)
 tests/     pytest — etl/ function tests, model/ column-split + preprocessing-discipline
            tests, bundle-contract tests (test_bundle.py, pure unit tests), SQL
            structural tests (test_views.py, needs a reachable Postgres — skips

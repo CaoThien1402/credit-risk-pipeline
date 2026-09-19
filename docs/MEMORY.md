@@ -428,7 +428,7 @@ catches. Findings, all fixed in the same pass:
   ranges queried directly from `ml_features` (not guessed), a form-level check mirroring
   `schema.sql`'s `emp_length <= age - 14` CHECK constraint, decision + P(default) +
   an expander explaining the threshold choice. SHAP top-3 reasons deliberately left as a
-  TODO for session 14, not built here.
+  TODO for session 14 (built there, see below).
 - **Verified in an actual browser, not just headlessly.** No project-specific run-skill
   existed yet; `chromium-cli` wasn't available on this machine either, so fell back to a
   hand-rolled Playwright (Node, via `npx`) driver script. Confirmed: form loads with real
@@ -445,6 +445,40 @@ catches. Findings, all fixed in the same pass:
   99.4% → REJECT; a roughly-median profile → 27.4% → APPROVE (below the 0.53 cutoff even
   though above the 21.8% base rate — expected, since the threshold was deliberately set
   above the naive base rate to account for the FN/FP cost asymmetry).
+
+### Session 14 (2026-09-19) — SHAP explanations in the prediction tab
+
+- `app/app.py` Tab 1 now shows, under the decision, a "Why this prediction?" section: a
+  top-3 table (Feature / Applicant's value / Effect / Contribution) and a SHAP force
+  plot. The explainer is `shap.TreeExplainer(bundle["model"])`, cached with
+  `st.cache_resource`. SHAP operates on the **transformed** 35-column space
+  (`preprocessor.get_feature_names_out()`, e.g. `home_ownership_RENT`), so
+  `describe_transformed_feature` maps each one-hot name back to the raw field and the
+  value the officer actually typed. Numeric columns show the raw input, not the
+  standardized value.
+- **Force plot axis is log-odds, not probability.** f(x) on the plot (e.g. -1.19 for
+  the default APPROVE profile, 4.82 for the high-risk REJECT one) is not comparable to
+  the P(default) shown above it (23.3% / 99.2%). The caption in the app says so —
+  without it the two numbers look like a contradiction.
+- Layout problems only visible in real screenshots, not in a headless run: (1) top-3
+  table columns clipped in a half-width column, so Effect/Contribution scrolled out of
+  view — now stacked full-width; (2) with 35 features, force-plot labels overlapped
+  into noise and printed unrounded floats — fixed with `.round(2)` on the values and
+  `contribution_threshold=0.12`, which hides labels on small segments (the table
+  already names the drivers); (3) `st.dataframe` draws to a **canvas**: its cell text
+  is not in the DOM, so `innerText` assertions read 0 matches, and its floating
+  toolbar overlapped the force plot. Switched to `st.table` (real HTML, 3 static rows
+  don't need sorting/scrolling).
+- Verified in a real browser with DOM assertions (Playwright), not screenshots alone:
+  default profile → APPROVE, 3 rows, all "decreases risk" (income -0.501,
+  loan_percent_income -0.3721, default_on_file N -0.292); high-risk profile → REJECT,
+  3 rows, all "increases risk" (loan_percent_income 0.8 +2.9247, home_ownership RENT
+  +0.8222, default_on_file Y +0.4586). Zero console errors in both.
+- Test run at the end of the session had Docker Desktop down: 60 passed, 9 skipped,
+  2 failed. The 2 failures are `tests/test_model_bundles.py` raising psycopg2
+  `OperationalError` (needs Postgres for its live row count), not a code regression.
+  The last full run with Docker up (before this session's app.py-only changes) was
+  69 passed / 2 skipped; re-run with Docker up before merging.
 
 ## Open questions — not yet resolved
 

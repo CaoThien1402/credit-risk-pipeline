@@ -4,7 +4,9 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import shap
 import streamlit as st
 
 APP_DIR = Path(__file__).resolve().parent
@@ -16,7 +18,7 @@ from utils import load_model_bundle
 from model.features import split_numeric_categorical
 from model.threshold import DECISION_THRESHOLD
 
-st.set_page_config(page_title="Credit Risk & Loan Approval", layout="wide")
+st.set_page_config(page_title="Credit Risk & Loan Approval", page_icon="💳", layout="wide")
 
 AT_APPLICATION_MODEL_PATH = REPO_ROOT / "models" / "at_application_model.pkl"
 
@@ -57,6 +59,40 @@ def get_at_application_bundle() -> dict:
     return load_model_bundle(str(AT_APPLICATION_MODEL_PATH))
 
 
+@st.cache_resource
+def get_shap_explainer(_model) -> "shap.TreeExplainer":
+    # Leading underscore tells st.cache_resource to skip hashing the model - it isn't
+    # trivially hashable, and this app only ever loads one at_application model per
+    # session, so there's no risk of silently reusing a stale explainer for a different
+    # model. Same TreeExplainer setup as notebooks/05_explainability_and_bundles.ipynb.
+    return shap.TreeExplainer(_model)
+
+
+def describe_transformed_feature(transformed_name: str, raw_inputs: dict, categorical_cols: list[str]) -> tuple[str, object]:
+    """Map a one-hot-expanded SHAP feature name back to the raw field + the applicant's
+    actual (human-readable) value for it - a credit officer reads "home_ownership: RENT",
+    not "home_ownership_RENT" or a standardized -0.19 for a numeric column."""
+    for col in categorical_cols:
+        if transformed_name == col or transformed_name.startswith(col + "_"):
+            return col, raw_inputs[col]
+    return transformed_name, raw_inputs[transformed_name]
+
+
+bundle = get_at_application_bundle()
+
+with st.sidebar:
+    st.subheader("At-application model")
+    _metrics = bundle["metrics"]
+    st.metric("ROC-AUC (5-fold CV)", f"{_metrics['roc_auc']:.4f} ± {_metrics['roc_auc_std']:.4f}")
+    st.metric("PR-AUC (5-fold CV)", f"{_metrics['pr_auc']:.4f} ± {_metrics['pr_auc_std']:.4f}")
+    st.metric("Decision threshold", f"{DECISION_THRESHOLD:.2f}")
+    st.caption(f"Trained on {bundle['trained_on_n_rows']:,} historical rows")
+    st.caption(f"Trained at: {bundle['trained_at']}")
+    st.caption(
+        "Excludes loan_grade/loan_int_rate (leakage) and gender/marital_status "
+        "(fair lending) — see CLAUDE.md."
+    )
+
 tab_predict, tab_dashboard = st.tabs(["New Application Prediction", "Portfolio Dashboard"])
 
 with tab_predict:
@@ -66,7 +102,6 @@ with tab_predict:
         "of underwriting, not data available at application time."
     )
 
-    bundle = get_at_application_bundle()
     feature_names = bundle["feature_names"]
     numeric_cols, categorical_cols = split_numeric_categorical(feature_names)
     fields = sorted(feature_names)  # stable, deterministic form layout
@@ -129,7 +164,58 @@ with tab_predict:
                         "applicant). Full derivation: "
                         "`notebooks/06_decision_threshold.ipynb`."
                     )
-                st.info("SHAP force plot with top-3 reasons — buổi 14, not yet built.")
+
+            st.divider()
+            st.subheader("Why this prediction?")
+
+            transformed_names = list(bundle["preprocessor"].get_feature_names_out())
+            row_df = pd.DataFrame(transformed, columns=transformed_names)
+
+            explainer = get_shap_explainer(bundle["model"])
+            row_shap_values = explainer.shap_values(row_df)[0]
+
+            top_3_idx = np.argsort(-np.abs(row_shap_values))[:3]
+            top_3 = pd.DataFrame(
+                [
+                    {
+                        "Feature": describe_transformed_feature(transformed_names[i], inputs, categorical_cols)[0],
+                        "Applicant's value": describe_transformed_feature(transformed_names[i], inputs, categorical_cols)[1],
+                        "Effect": "increases risk" if row_shap_values[i] > 0 else "decreases risk",
+                        "Contribution": round(float(row_shap_values[i]), 4),
+                    }
+                    for i in top_3_idx
+                ]
+            )
+
+            # Stacked full-width, not side by side: in a narrow column the table's
+            # Effect/Contribution columns (the ones that actually answer "why") scroll
+            # out of view, and the force plot's feature labels overlap into noise.
+            st.markdown("**Top 3 reasons for this decision** (largest |SHAP| impact):")
+            # st.table, not st.dataframe: 3 static rows need no sorting/scrolling, and
+            # st.dataframe draws to a canvas - its toolbar floated over the force plot
+            # below, and its cell text isn't in the DOM, so nothing could assert on it.
+            st.table(top_3.set_index("Feature"))
+
+            # Rounded so labels read "income = -0.18", not "-0.1786779784755...".
+            # contribution_threshold hides labels on small segments. With 35 transformed
+            # features most contribute almost nothing, and labelling all of them made the
+            # text collide (loan_intent_VENTURE over loan_intent_DEBTCONSOLIDATION, etc).
+            # The top-3 table above already names the drivers, so nothing is lost.
+            fig = shap.force_plot(
+                explainer.expected_value, row_shap_values, row_df.iloc[0].round(2),
+                matplotlib=True, show=False, figsize=(16, 3.2),
+                contribution_threshold=0.12,
+            )
+            st.pyplot(fig, clear_figure=True)
+            st.caption(
+                "Red segments push the prediction toward higher risk (reject); blue "
+                "segments push it toward lower risk (approve). The plot is in the "
+                "model's transformed feature space (scaled numerics, one-hot "
+                "categoricals), so its values won't match what you typed - the table "
+                "above translates the same features back. Its axis is log-odds, not "
+                "the probability shown at the top, so f(x) here is not comparable to "
+                "P(default) directly."
+            )
 
 with tab_dashboard:
     st.header("Portfolio Management Dashboard")
