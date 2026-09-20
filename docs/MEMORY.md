@@ -530,6 +530,36 @@ catches. Findings, all fixed in the same pass:
 - Full suite with Postgres up: **74 passed, 2 skipped** (was 69+2; +5 new tests, and
   `test_model_bundles.py` runs now that the DB is reachable).
 
+### Post-session-16 full review (2026-09-19)
+
+- **`clean_outliers` had a latent ordering bug.** It nulled `person_age` before computing
+  `emp_length > age - 14`, so for `age > 100` rows the comparison ran against `NaN`
+  (always `False`) and an unvalidated `emp_length` survived; after median-imputing age
+  to 26 that row would violate `schema.sql`'s CHECK at insert. Verified on the real
+  data: 5 rows `age>100`, 2 rows `emp_length > age-14`, **0 rows hitting both** — latent,
+  never fired. Fixed, plus `check_schema_invariants()` as a post-imputation backstop.
+  Side effect: those 5 rows now have `emp_length` imputed rather than kept (895 → 902
+  NaNs before imputation).
+- **The README's headline CV number was never the shipped model's.** README quoted
+  0.8923 ± 0.0048; the bundle (and the app sidebar) says 0.8928 ± 0.0045. Not a typo —
+  `04_smote_comparison.ipynb` derives `scale_pos_weight` from `train_df`, while
+  `05_explainability_and_bundles.ipynb` derives it from the full `df` (3.5837). Two
+  different estimators, both 5-fold CV'd on all 32,581 rows with the same seed. Recorded
+  in the README rather than "corrected" by overwriting a legitimate number.
+  Open wrinkle: notebook 04 takes the hyperparameter from the train split but CVs over
+  the full set, so it's derived from data inside its own folds. Negligible for a class
+  ratio, but inconsistent if questioned.
+- **Test gaps closed**: `impute_missing` had zero test references repo-wide despite
+  CLAUDE.md calling its `person_age` line load-bearing; the cap-before-impute ordering
+  was prose only (swapping the two lines failed nothing); `make_application_ref`, the
+  UPSERT key, was untested. 85 passed / 2 skipped afterwards, up from 74 / 2.
+- **Removed `main.py`**, the `uv init` "Hello from credit-risk-pipeline!" leftover — it
+  was tracked in git and sat at the repo root.
+- **REVIEW.md restructured rather than replaced.** It was stale (headed "hết buổi 9")
+  but contained four review passes and an interview-prep section on explaining the
+  numbers, none of it superseded. New review prepended; old content kept below a
+  divider.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.

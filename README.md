@@ -1,7 +1,11 @@
 # Credit Risk & Loan Approval Pipeline
 
-Scaffold for the 17-session plan in `docs/Credit_Risk_Pipeline_Plan_v3.md`, with fixes already
-integrated from a direct audit of `Credit_Risk_Dataset.xlsx` (32,581 rows, 29 columns).
+End-to-end credit risk pipeline built over the 17-session plan in
+`docs/Credit_Risk_Pipeline_Plan_v3.md`, with fixes integrated from a direct audit of
+`Credit_Risk_Dataset.xlsx` (32,581 rows, 29 columns). Sessions 1-16 are built: Excel →
+PostgreSQL (4 tables) → SQL feature views → XGBoost (2 models) → a two-tab Streamlit app
+(approve/reject with SHAP reasons, and a portfolio dashboard). Session 17 (README
+narrative + demo capture) is the remaining one.
 
 ## Pipeline shape
 
@@ -53,6 +57,25 @@ folds measure the table's row order rather than the model. An earlier version of
 section quoted 0.8606 ± 0.0355 from unshuffled CV and drew the wrong conclusion from it —
 see `notebooks/04_smote_comparison.ipynb` for the correction.
 
+### What the app actually ships
+
+The rows above are the session 9-11 comparison runs. The two bundles in `models/` are a
+third thing again, and the numbers differ — `bundle["metrics"]`, which is what the
+Streamlit sidebar displays:
+
+| Bundle | Feature set | CV ROC-AUC | CV PR-AUC | Trained on |
+|---|---|---|---|---|
+| `at_application_model.pkl` | `at_application` | 0.8928 ± 0.0045 | 0.8032 ± 0.0090 | 32,581 (all historical) |
+| `portfolio_risk_model.pkl` | `portfolio` | 0.9370 ± 0.0035 | 0.8858 ± 0.0065 | 32,581 (all historical) |
+
+Both are 5-fold `StratifiedKFold(shuffle=True, random_state=42)` on the full dataset,
+recomputed in `notebooks/05_explainability_and_bundles.ipynb`. They are close to, but
+not identical with, the session 10-11 figures (0.8928 vs 0.8923 for `at_application`)
+because the shipped estimator derives `scale_pos_weight` from the full dataset
+(3.5837) while session 11 derived it from the train split — a slightly different model,
+cross-validated the same way, not the same model measured twice. Neither number is
+obtained by scoring a refit model against its own training rows.
+
 **Session 11 result**: `scale_pos_weight` beats SMOTE by 0.026 PR-AUC, with
 non-overlapping fold ranges — every fold prefers it. The shipped at-application model
 therefore trains on real rows only, with the loss reweighted, rather than on synthesised
@@ -96,25 +119,39 @@ credit-risk-pipeline/
 ├── etl/
 │   ├── config.py                # Postgres connection from .env
 │   ├── historical_load.py       # bulk-loads the historical dataset
-│   └── daily_ingest.py          # simulates new daily applications
+│   ├── daily_ingest.py          # simulates new daily applications
+│   └── run_daily_ingest.ps1     # Task Scheduler wrapper (Windows)
+├── data/
+│   └── Credit_Risk_Dataset.xlsx # the raw input, committed — see the section below
 ├── notebooks/
 │   ├── 01_eda.ipynb             # session 8: EDA, missingness, leakage scan
 │   ├── 02_baseline_model.ipynb  # session 9: baseline Logistic Regression, 2 feature sets
 │   ├── 03_xgboost_model.ipynb   # session 10: XGBoost + scale_pos_weight
-│   └── 04_smote_comparison.ipynb # session 11: SMOTE vs scale_pos_weight
+│   ├── 04_smote_comparison.ipynb # session 11: SMOTE vs scale_pos_weight
+│   ├── 05_explainability_and_bundles.ipynb  # session 12: SHAP + writes models/*.pkl
+│   ├── 06_decision_threshold.ipynb          # session 13: derives DECISION_THRESHOLD
+│   └── figures/                 # PNGs exported for this README (via kaleido)
 ├── model/
 │   ├── features.py              # column bookkeeping (id/target/leakage/protected/categorical)
 │   ├── preprocessing.py         # ColumnTransformer + Pipeline, shared by every session
-│   └── bundle.py                 # validates the model-bundle contract app.py depends on
-├── models/                      # model bundles (.pkl) saved here
+│   ├── bundle.py                 # validates the model-bundle contract app.py depends on
+│   └── threshold.py              # DECISION_THRESHOLD = 0.53, derived in notebook 06
+├── models/                      # model bundles (.pkl) — gitignored, rebuild via notebook 05
 ├── app/
 │   ├── app.py                   # Streamlit, 2 tabs
-│   └── utils.py
-├── tests/                       # pytest — etl/, model/, and SQL structural tests
+│   ├── explanations.py          # SHAP → raw-field mapping (importable without the .pkl)
+│   └── utils.py                 # load_model_bundle, validates the bundle contract
+├── tests/                       # pytest — etl/, model/, app/, and SQL structural tests
 ├── scripts/
 │   └── dump_db.sh                # snapshots the running DB into db-seed/
 ├── db-seed/
 │   └── 01_seed.sql                # auto-loaded by Postgres on an empty volume
+├── docs/
+│   ├── Credit_Risk_Pipeline_Plan_v3.md  # the 17-session plan
+│   └── MEMORY.md                # dated findings, per session
+├── .github/workflows/ci.yml     # pytest on every push and PR to main
+├── CLAUDE.md                    # working agreements + the constraints that must not regress
+├── REVIEW.md                    # most recent full-repo review
 ├── docker-compose.yml           # Postgres
 ├── pyproject.toml               # dependencies (uv) — source of truth, no requirements.txt
 └── .env.example

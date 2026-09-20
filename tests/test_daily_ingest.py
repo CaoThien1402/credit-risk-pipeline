@@ -1,6 +1,7 @@
 """Tests for etl/daily_ingest.py's sampling logic (pure function, no DB needed)."""
 import os
 import sys
+from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "etl"))
 
@@ -8,7 +9,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from daily_ingest import CATEGORICAL_COLS, NUMERIC_COLS, build_daily_batch, sample_new_applications
+from daily_ingest import (
+    CATEGORICAL_COLS,
+    NUMERIC_COLS,
+    build_daily_batch,
+    make_application_ref,
+    sample_new_applications,
+)
 
 
 def _reference_stats(n=20):
@@ -89,3 +96,27 @@ def test_build_daily_batch_generates_a_seed_when_none_given():
     seed, batch = build_daily_batch(ref, seed=None)
     assert isinstance(seed, int)
     assert len(batch) >= 50 and len(batch) <= 100
+
+
+# --- make_application_ref ----------------------------------------------------------
+# Small function, but it is the UPSERT key the whole daily ingest depends on: loan_id is
+# SERIAL, so ON CONFLICT (loan_id) never fires and application_ref is what actually makes
+# a second run of the same day idempotent (schema.sql, CLAUDE.md).
+
+def test_same_client_and_day_produces_the_same_ref():
+    """Why the ingest is idempotent within a day: re-running must collide on purpose."""
+    day = date(2026, 9, 19)
+    assert make_application_ref("c1", day) == make_application_ref("c1", day)
+
+
+def test_ref_changes_with_the_client_and_with_the_day():
+    day, next_day = date(2026, 9, 19), date(2026, 9, 20)
+    assert make_application_ref("c1", day) != make_application_ref("c2", day)
+    assert make_application_ref("c1", day) != make_application_ref("c1", next_day)
+
+
+def test_ref_fits_the_column_it_is_stored_in():
+    """application_ref is VARCHAR(64); a longer digest would be truncated or rejected."""
+    ref = make_application_ref("c1", date(2026, 9, 19))
+    assert len(ref) == 32
+    assert all(ch in "0123456789abcdef" for ch in ref)
