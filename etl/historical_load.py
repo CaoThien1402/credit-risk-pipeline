@@ -18,8 +18,22 @@ def clean_outliers(df: pd.DataFrame) -> pd.DataFrame:
     """Cap invalid person_age and person_emp_length outliers to NaN."""
     # Capped, not dropped, so the rest of each row's data survives.
     df = df.copy()
-    df.loc[df["person_age"] > 100, "person_age"] = np.nan
-    bad_emp = df["person_emp_length"] > (df["person_age"] - 14)
+    invalid_age = df["person_age"] > 100
+
+    # emp_length is only meaningful relative to age, so a row whose age we are about to
+    # reject has no trustworthy baseline to check it against - its emp_length is
+    # unvalidatable and goes to NaN too, to be median-imputed like any other gap.
+    #
+    # Deliberately NOT written as "null age first, then compare against it": that
+    # ordering compares emp_length to NaN, which is False for every row, so the check
+    # silently passes and an unvalidated emp_length survives. impute_missing then fills
+    # age with the median (26), and a value that looked fine beside age 144 can violate
+    # schema.sql's CHECK (emp_length <= age - 14) at insert time. No row in the current
+    # data hits both conditions, so this is a latent bug rather than an active one -
+    # tests/test_historical_load.py constructs the row that would trigger it.
+    bad_emp = (df["person_emp_length"] > (df["person_age"] - 14)) | invalid_age
+
+    df.loc[invalid_age, "person_age"] = np.nan
     df.loc[bad_emp, "person_emp_length"] = np.nan
     return df
 
@@ -33,6 +47,32 @@ def impute_missing(df: pd.DataFrame) -> pd.DataFrame:
     df["person_age"] = df["person_age"].fillna(df["person_age"].median())
     df["person_emp_length"] = df["person_emp_length"].fillna(df["person_emp_length"].median())
     df["loan_int_rate"] = df["loan_int_rate"].fillna(df["loan_int_rate"].median())
+    return df
+
+
+def check_schema_invariants(df: pd.DataFrame) -> pd.DataFrame:
+    """Fail before the insert if a row would violate schema.sql's CHECK constraints.
+
+    Returns df unchanged; raises ValueError naming the offending rows. This is the
+    belt to clean_outliers' braces: that function's job is to make the invariants
+    true, and this one's is to prove they are, at the last point where the error can
+    still name a dataframe row instead of surfacing as an opaque psycopg2
+    CheckViolation from inside a bulk to_sql of 32,581 records.
+    """
+    age, emp = df["person_age"], df["person_emp_length"]
+
+    if age.isna().any():
+        raise ValueError(
+            f"{int(age.isna().sum())} rows still have a null person_age, but "
+            "customers.age is NOT NULL - impute_missing must fill every one"
+        )
+
+    violations = df[emp.notna() & (emp > age - 14)]
+    if not violations.empty:
+        raise ValueError(
+            f"{len(violations)} rows violate CHECK (emp_length <= age - 14):\n"
+            f"{violations[['person_age', 'person_emp_length']].head()}"
+        )
     return df
 
 
@@ -132,8 +172,12 @@ def load_to_postgres(tables: dict[str, pd.DataFrame]) -> None:
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     raw = load_raw()
+    # Order is load-bearing: capping must precede imputing, or the outliers drag the
+    # median they're about to be replaced with. Guarded by
+    # tests/test_historical_load.py::test_capping_before_imputing_keeps_outliers_out_of_the_median.
     raw = clean_outliers(raw)
     raw = impute_missing(raw)
+    raw = check_schema_invariants(raw)
     raw = backfill_loan_dates(raw)
     raw = drop_redundant_columns(raw)
     tables = split_into_tables(raw)

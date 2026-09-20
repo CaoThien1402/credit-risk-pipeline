@@ -1,4 +1,80 @@
+# Review toàn dự án — sau buổi 16
+
+**Ngày review**: 2026-09-19
+**Phạm vi**: toàn repo từ buổi 1, tại commit `1185cda`.
+**Nguyên tắc**: chỗ nào tài liệu và code mâu thuẫn thì code đúng, tài liệu phải sửa. Mọi nhận định dẫn `file:line` hoặc output lệnh thật.
+**Lịch sử**: review cũ (hết buổi 9, 2026-09-12) nằm nguyên phía dưới dấu phân cách. Giữ lại vì phần "GHI CHÚ TRỰC TIẾP — giải thích số liệu khi phỏng vấn" ở cuối file vẫn còn giá trị và chưa có gì thay thế.
+
+---
+
+## Làm tốt
+
+**1. Chống leakage là bảo đảm cấu trúc, không phải quy ước.** `sql/views.sql:52-58` tách `dashboard_aggregates` thành view riêng nên training code không có đường nào chạm `default_rate_by_grade` (chính là `AVG(loan_status)`). `tests/test_views.py:67-71` assert điều đó trên DB sống. Khác biệt giữa "tôi nhớ là không dùng cột đó" và "hệ thống không cho phép".
+
+**2. `tests/test_preprocessing.py:158-173` là test mạnh nhất repo.** Bắt lỗi fit-trước-split ở mức *source notebook*; docstring `:62-66` giải thích vì sao assertion mức pipeline **không thể** bắt được (`ColumnTransformer.fit` clone rồi refit, xoá sạch dấu vết). `_all_notebooks()` (`:122-137`) dùng discovery thay allowlist, có lý do cụ thể.
+
+**3. `tests/test_historical_load.py:62-84` tự ghi lại hai thứ seed không kiểm soát được** (`uuid4`, `datetime.today()`), rồi chọn assert "reproducible in shape" thay vì bit-for-bit — vì assert chặt sẽ pass trên máy nhanh, fail trên máy chậm.
+
+**4. `model/bundle.py:44-49` + `tests/test_model_bundles.py:44-49`**: `expected_n_rows` đối chiếu `COUNT(*)` chạy độc lập. Phân biệt rõ "field tồn tại" với "đã được kiểm chứng".
+
+**5. Ngưỡng 0.53 (`model/threshold.py`)** suy ra sau khi kiểm chứng `predict_proba` không calibrated, nên công thức sách bị loại có lý do — chỗ gần như mọi portfolio project dùng 0.5 mặc định.
+
+**6. Protected attributes bị loại khỏi *cả hai* feature set** (`model/features.py:29-37`), có căn cứ pháp lý và bằng chứng không mất accuracy.
+
+## Cần cải thiện
+
+Xếp theo mức ảnh hưởng tới người đánh giá tuyển dụng. Mục đánh dấu ✅ đã sửa ngay trong lần review này.
+
+**1. README mô tả một dự án nhỏ hơn dự án thật.** Đây là thứ đọc đầu tiên.
+- ✅ `README.md:3` gọi đây là *"Scaffold for the 17-session plan"* trong khi đã xong 16/17 buổi.
+- ✅ Cây thư mục thiếu `notebooks/05`, `06`, `figures/`, `model/threshold.py`, `app/explanations.py`, `data/`, `docs/`, `.github/`. Chính `README.md:86-89` có cảnh báo *"Update this tree in the same commit... It has gone stale more than once"* — quy tắc do file tự đặt, và file tự vi phạm.
+- ✅ README không nhắc `DECISION_THRESHOLD`, SHAP, dashboard, model bundles. Đã thêm bảng số liệu của 2 bundle đang ship.
+- ⚠️ Còn lại cho buổi 17: phần lập luận leakage phải **tự viết** (kế hoạch buổi 17 nói rõ: dùng lý luận tự rút ra ở buổi 8, không copy), và screenshot/demo.
+
+**2. Con số CV trong README không phải con số của model đang ship.** `README.md` ghi 0.8923 ± 0.0048 cho session 10-11, nhưng bundle ship 0.8928 ± 0.0045 — và đó mới là số sidebar app hiển thị.
+
+Đã truy nguyên nhân thay vì đoán: **không phải một con số sai**, mà là hai estimator khác nhau. `04_smote_comparison.ipynb` lấy `neg, pos = train_df[TARGET_COL].value_counts()` (train split), còn `05_explainability_and_bundles.ipynb` lấy `neg, pos = df[TARGET_COL].value_counts()` (toàn bộ 32,581 dòng) → `scale_pos_weight` khác nhau (bundle: 3.5837), cả hai cùng CV trên full data với cùng seed. ✅ Đã ghi rõ trong README thay vì sửa đè một con số hợp lệ.
+
+*Ghi chú phương pháp, chưa sửa*: notebook 04 lấy `scale_pos_weight` từ `train_df` rồi CV trên **toàn bộ** `df`, tức hyperparameter được suy từ dữ liệu nằm trong các fold của chính phép CV đó. Với một tỷ lệ class thì ảnh hưởng không đáng kể, nhưng là chỗ không nhất quán nếu bị hỏi.
+
+**3. ✅ `impute_missing()` trước đây không có một test nào.** Grep toàn repo chỉ ra `etl/historical_load.py:27` (định nghĩa) và dòng gọi trong `__main__` — trong khi CLAUDE.md dành hẳn một constraint nói dòng `person_age` ở đây là load-bearing. Thứ tự cap-trước-impute cũng không test nào giữ: đảo hai dòng đó thì không test nào đỏ. Đã thêm `test_impute_missing_*` và `test_capping_before_imputing_keeps_outliers_out_of_the_median` (test này assert cả hai chiều: đúng thứ tự ra median 22.0, sai thứ tự ra 24.0).
+
+**4. ✅ `clean_outliers` có lỗi thứ tự tiềm ẩn.** `etl/historical_load.py` cũ set `age = NaN` *trước* rồi mới tính `bad_emp = emp_length > (age - 14)`. Với dòng `age > 100`, phép so sánh chạy trên `NaN` → `False` → `emp_length` không được kiểm tra; `impute_missing` sau đó điền `age = 26` và dòng đó vi phạm CHECK `emp_length <= age - 14` ở `schema.sql:22`.
+
+Verify trên dữ liệu thật: 5 dòng `age>100`, 2 dòng `emp_length > age-14`, **0 dòng dính cả hai** → lỗi tiềm ẩn, chưa từng nổ. Đã sửa (tính `bad_emp` trước khi NaN hoá age, và coi `emp_length` của dòng age hỏng là không kiểm chứng được), thêm `check_schema_invariants()` để fail sớm với thông báo chỉ đúng dòng thay vì `CheckViolation` mù từ trong `to_sql`. Hệ quả: 5 dòng nay có `emp_length` được impute thay vì giữ nguyên (895 → 902 giá trị NaN trước khi impute).
+
+**5. ✅ `main.py` là rác từ `uv init`** — in `"Hello from credit-risk-pipeline!"`, tracked trong git, nằm ở root. Đã xoá.
+
+**6. ✅ `make_application_ref` không có test** dù là UPSERT key. Đã thêm 3 test (cùng client+ngày → trùng có chủ đích; đổi client hoặc đổi ngày → khác; độ dài 32 hex vừa `VARCHAR(64)`).
+
+**7. `app/app.py` đã 502 dòng**, gánh ba việc: form, SHAP, và query + chart của dashboard. Chưa chặn gì, nhưng tách `app/dashboard.py` sẽ hợp lý nếu còn phát triển tiếp.
+
+## Mức độ hoàn thiện
+
+**Portfolio-ready sau khi buổi 17 viết xong phần narrative.**
+
+Phần kỹ thuật trên mức trung bình của portfolio project: kỷ luật leakage có bảo đảm cấu trúc, test bắt được lỗi mà test thông thường không bắt được, ngưỡng quyết định suy từ kinh tế thật chứ không phải mặc định 0.5. Nếu người phỏng vấn đọc `tests/` và `sql/views.sql`, đây là điểm mạnh thật.
+
+Trước lần review này, khoảng cách nằm ở mặt tiền: README nói đây là "scaffold", thiếu 5 buổi gần nhất, và có con số lệch với model đang ship. Các mục ✅ ở trên đã đóng phần sự thật khách quan. Còn lại đúng một việc thuộc về buổi 17 và **phải do bạn viết**: lập luận leakage bằng ngôn ngữ của chính bạn, cộng screenshot/demo.
+
+Test: **85 passed, 2 skipped** (trước lần này: 74+2). 2 skip là `01_eda` và `05_explainability` không có `train_test_split` — đúng thiết kế.
+
+## Trước buổi 17
+
+Bốn việc trong danh sách gốc đã xong (mục 1 phần sự thật, 3, 4, 5, 6). Còn lại:
+
+1. **Viết phần narrative của README bằng lời của bạn** — vì sao 2 model, vì sao loại `loan_grade`/`loan_int_rate`, vì sao PR-AUC là metric chính. Kế hoạch buổi 17 nói rõ đây là phần không được copy.
+2. **Chụp screenshot/demo 2 tab** và gắn vào README.
+3. Hai luận điểm đáng đưa vào README, hiện chưa nằm ở đâu, và là chỗ mạnh khi phỏng vấn:
+   - `predict_proba` không calibrated nên 0.5 là sai — có số thật: ở score ~0.50, tỷ lệ default thật trong bin đó chỉ ~24%.
+   - Autoscaling của Plotly suýt biến chênh lệch 0.13pp giữa 3 nước thành bản đồ đỏ-xanh kịch tính; đã phải ghim thang màu lại. Đây là loại lỗi "biểu đồ nói dối" mà ít ai kể được bằng ví dụ của chính mình.
+4. Cân nhắc mục 7 (tách `app/dashboard.py`) nếu còn định phát triển tiếp sau buổi 17.
+
+---
+
 # Code Review — Credit Risk Pipeline (trạng thái: hết buổi 9)
+
+> Review cũ, giữ nguyên làm lịch sử. Một số mục đã được xử lý ở các PR sau đó.
 
 **Ngày review**: 2026-09-12
 **Phạm vi**: toàn repo tại commit `bca5693`, đối chiếu với `docs/Credit_Risk_Pipeline_Plan_v3.md` buổi 1-9.
