@@ -316,11 +316,14 @@ with tab_predict:
             # contribution_threshold hides labels on small segments. With 35 transformed
             # features most contribute almost nothing, and labelling all of them made the
             # text collide (loan_intent_VENTURE over loan_intent_DEBTCONSOLIDATION, etc).
-            # The top-3 table above already names the drivers, so nothing is lost.
+            # Raised from 0.12 to 0.28 after the session 17 demo capture: on a low-risk
+            # applicant the many near-zero blue segments still collided into unreadable
+            # text at 0.12. The top-3 table above already names the drivers by raw field
+            # name, so a hidden label costs the reader nothing.
             fig = shap.force_plot(
                 explainer.expected_value, row_shap_values, row_df.iloc[0].round(2),
                 matplotlib=True, show=False, figsize=(16, 3.2),
-                contribution_threshold=0.12,
+                contribution_threshold=0.28,
             )
             st.pyplot(fig, clear_figure=True)
             st.caption(

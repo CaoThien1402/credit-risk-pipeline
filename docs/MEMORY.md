@@ -560,6 +560,25 @@ catches. Findings, all fixed in the same pass:
   numbers, none of it superseded. New review prepended; old content kept below a
   divider.
 
+### Session 17 (2026-09-20) — README, demo capture, project close
+
+- **README rewritten into a portfolio front page**: added a Demo section with 4 real
+  app screenshots (`docs/images/`), a "Why two models" section carrying the full
+  leakage argument with session 8's numbers, a "Why PR-AUC not accuracy" section, and
+  a section on why the cutoff is 0.53. Every figure quoted was re-checked against the
+  live DB at write time (grade default rates 9.96 → 98.44, base rate 21.82%), not
+  copied from an earlier draft.
+- **`contribution_threshold` on the SHAP force plot raised 0.12 → 0.28.** At 0.12 a
+  low-risk applicant's many near-zero blue segments still collided into unreadable
+  overlapping labels — visible only in the demo screenshot, not in any assertion. The
+  top-3 table names the drivers by raw field, so hidden small labels cost nothing.
+- **Screenshot capture is scripted, not manual**: a Playwright script drives the real
+  app (fills the form, submits, scrolls the decision to the top of the frame, shoots
+  at deviceScaleFactor 2). Re-runnable after any UI change. Streamlit selectboxes
+  needed a type-ahead fallback — `getByRole('option')` intermittently fails to mount
+  headless.
+- Total README: 320 lines. Images ~1.5 MB across 4 PNGs.
+
 ## Open questions — not yet resolved
 
 - `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.

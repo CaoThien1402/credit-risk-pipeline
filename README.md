@@ -37,6 +37,78 @@ and it structurally cannot expose the three dashboard-only window columns — on
 is `AVG(loan_status)`, the target itself. That's a schema-level guarantee, not a
 convention someone has to remember.
 
+## Demo
+
+**Tab 1 — one application, decided and explained.** The form collects only the 18 fields
+that exist at application time. It returns the decision, the probability, the three
+largest SHAP contributions translated back to raw field names, and a force plot.
+
+![Prediction tab, approve case](docs/images/app_tab1_approve.png)
+
+The same form, a high-risk applicant:
+
+![Prediction tab, reject case](docs/images/app_tab1_reject.png)
+
+**Tab 2 — the existing book**, read live from Postgres:
+
+![Dashboard: KPIs and monthly disbursement](docs/images/app_tab2_dashboard_top.png)
+
+![Dashboard: default rate by grade and country, and the city map](docs/images/app_tab2_dashboard_charts.png)
+
+## Why two models, and why the one that matters is the weaker one
+
+`loan_grade` and `loan_int_rate` are the two most predictive columns in this dataset,
+and neither is allowed into the model that decides new applications. That is the
+central design decision here, so the evidence for it is worth stating in full.
+
+**Grade is very nearly the target itself.** Default rate by grade across all 32,581
+historical rows:
+
+| Grade | A | B | C | D | E | F | G |
+|---|---|---|---|---|---|---|---|
+| Default rate | 9.96% | 16.3% | 20.7% | 59.0% | 64.4% | 70.5% | 98.4% |
+
+That is an 88.5-point spread. The next-widest categorical anywhere in the feature set
+is `home_ownership` at 24.1 points; `country` is flat at 0.13. And grade nearly fixes
+the rate: ranking all 117 numeric-by-categorical pairs by within-group variance ratio,
+`loan_grade` → `loan_int_rate` is the lowest at 0.393 (next lowest 0.624). Within a
+single grade the interest rate varies by about 1 point, while the grade means climb
+from 7.3% at A to 20.25% at G.
+
+**But both are underwriting outputs, not application inputs.** A grade is what the
+lender assigns *after* assessing the applicant. At the moment a new application
+arrives — the moment this model exists to serve — no grade and no rate exist yet. A
+model trained on them does not predict default so much as read back a verdict some
+other process already reached. It would score beautifully offline and be unrunnable in
+production, because in production the input column would be empty.
+
+This is why the leakage is not caught by any train/test discipline. The split is
+honest; the columns are real; the metric is computed correctly. The problem is that
+the feature is unavailable at inference time, and no amount of cross-validation
+detects that — only knowing where the column comes from does.
+
+**The cost of refusing them is measurable**, and it is the honest price of a usable
+model:
+
+| | CV ROC-AUC | CV PR-AUC |
+|---|---|---|
+| `portfolio` (keeps grade + rate) | 0.9370 | 0.8858 |
+| `at_application` (drops both) | 0.8928 | 0.8032 |
+
+The 0.083 PR-AUC gap is not accuracy lost. It is accuracy that was never the model's to
+begin with, handed back. The `portfolio` model still exists as a separate, explicitly
+labelled bundle — it is the right tool for analysing loans already on the book, where
+grade genuinely is known. The two are kept apart at the file level (`models/`), the
+feature level (`model/features.py::LEAKAGE_COLS`), and the view level (`sql/views.sql`),
+so using the wrong one requires deliberately reaching for it.
+
+**Separately, and for a different reason, `gender` and `marital_status` reach neither
+model.** Those are protected attributes under US ECOA / Regulation B, with equivalents
+in Canada and the UK — all three countries appear in this data. That exclusion is a
+compliance line, not a leakage one, so it applies to the portfolio model too. Session
+8's scan happened to make it free: their default-rate spreads are 0.11pp and 0.59pp
+against a 21.8% base rate, i.e. noise.
+
 ## Results
 
 Test set is a stratified 20% holdout (`random_state=42`), same split for every row below.
@@ -91,6 +163,44 @@ statistically indistinguishable from noise (`past_delinquencies` single-feature 
 augmentation generated independently of the target. The real signal comes from the
 original dataset's own columns, and SHAP importance assigned to the noise columns in
 session 12 should be read as fitting randomness.
+
+### Why PR-AUC is the headline metric, not accuracy
+
+The base rate is 21.8%. A model that predicts "will not default" for every single
+applicant is therefore 78.2% accurate, and useless — accuracy here mostly measures the
+class imbalance. ROC-AUC is better but still flattering under imbalance: its false
+positive rate divides by a large negative class, so a model can look strong while
+catching few actual defaulters.
+
+PR-AUC is reported first because its no-skill baseline *is* the base rate, 0.218. The
+shipped model's 0.8032 is measured against that floor, and it is computed on the
+positive class — the defaulters, who are the ones the decision is about. The asymmetry
+is real money: a missed default costs the principal, while a wrongly rejected good
+applicant costs the interest margin, which is the smaller number.
+
+## The approve/reject cutoff is 0.53, not 0.5
+
+`predict_proba` from this model is **not** a calibrated probability, and treating it as
+one would put the threshold in the wrong place. `scale_pos_weight` reweights the
+training loss to correct for the 21.8% base rate, and shifts the output scores as a
+side effect. Checked directly in `notebooks/06_decision_threshold.ipynb`: among
+applicants scoring around 0.50, the real historical default rate is about **24%**, not
+50%. Every textbook cutoff formula — including `t* = C_FP / (C_FP + C_FN)` — assumes
+the score is a probability, so all of them give the wrong answer on this model.
+
+The threshold was found empirically instead: sweep every cutoff against the held-out
+test set, price each row with its own `loan_amnt`, `loan_int_rate` and
+`loan_term_months`, and take the minimum real expected cost per applicant. Cost of a
+missed default ≈ the principal; cost of a wrongly rejected good applicant ≈ the
+interest forgone. 0.53 won, beating the naive 0.5, Youden's J, F1-max and a recall ≥
+90% policy target, each of which either treats the two errors as equally expensive or
+optimises a constraint rather than cost. It is also stable against the one real
+assumption behind it: moving recovery on default from 0% to 20-40% shifts the optimum
+only to 0.565.
+
+`loan_int_rate` appears in that calculation only to price outcomes that already
+happened, after the fact. It never reaches the model as an input, so this does not
+reopen the leakage question above.
 
 ## Differences from the original plan
 
@@ -148,7 +258,8 @@ credit-risk-pipeline/
 │   └── 01_seed.sql                # auto-loaded by Postgres on an empty volume
 ├── docs/
 │   ├── Credit_Risk_Pipeline_Plan_v3.md  # the 17-session plan
-│   └── MEMORY.md                # dated findings, per session
+│   ├── MEMORY.md                # dated findings, per session
+│   └── images/                  # app screenshots used in this README
 ├── .github/workflows/ci.yml     # pytest on every push and PR to main
 ├── CLAUDE.md                    # working agreements + the constraints that must not regress
 ├── REVIEW.md                    # most recent full-repo review
