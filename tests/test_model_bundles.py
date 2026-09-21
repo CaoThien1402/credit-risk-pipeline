@@ -31,13 +31,25 @@ def _bundle_path(filename):
 
 
 @pytest.fixture(scope="module")
-def historical_row_count():
+def db_engine():
+    """A connected engine, or skip. Every test in this module needs the database, so the
+    skip lives here rather than inside one of them - a test that calls get_engine()
+    itself would raise OperationalError and report as a FAILURE, not a skip, the moment
+    Docker is down. That is exactly what happened before this fixture existed, and it
+    contradicted this module's own docstring."""
     try:
         engine = get_engine()
-        with engine.connect() as conn:
-            return conn.execute(text("SELECT COUNT(*) FROM ml_features")).scalar()
+        with engine.connect():
+            pass
     except Exception as exc:
         pytest.skip(f"no reachable Postgres ({exc}) - run `docker compose up -d` first")
+    return engine
+
+
+@pytest.fixture(scope="module")
+def historical_row_count(db_engine):
+    with db_engine.connect() as conn:
+        return conn.execute(text("SELECT COUNT(*) FROM ml_features")).scalar()
 
 
 @pytest.mark.parametrize("filename", ["at_application_model.pkl", "portfolio_risk_model.pkl"])
@@ -50,15 +62,14 @@ def test_bundle_was_trained_on_the_full_historical_dataset(filename, historical_
 
 
 @pytest.mark.parametrize("filename", ["at_application_model.pkl", "portfolio_risk_model.pkl"])
-def test_bundle_predicts_through_preprocessor_then_model(filename):
+def test_bundle_predicts_through_preprocessor_then_model(filename, db_engine):
     """Contract check on the real artifact: preprocessor.transform -> model.predict_proba,
     the same two explicit steps app.py will call - not the whole fitted Pipeline object."""
     import pandas as pd
 
     bundle = joblib.load(_bundle_path(filename))
-    engine = get_engine()
     sample = pd.read_sql(
-        f"SELECT {', '.join(bundle['feature_names'])} FROM ml_features LIMIT 1", engine
+        f"SELECT {', '.join(bundle['feature_names'])} FROM ml_features LIMIT 1", db_engine
     )
     transformed = bundle["preprocessor"].transform(sample)
     proba = bundle["model"].predict_proba(transformed)

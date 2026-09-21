@@ -1,12 +1,25 @@
+# Credentials come from .env — the same file etl/config.py::get_engine() reads, so there
+# is exactly one place to change them. They used to be hardcoded here, which meant
+# following the README's "set a real password" instruction broke the connection: the app
+# read the new password from .env while the container kept the old literal.
+#
+# The `:?` form fails with the message shown instead of silently substituting an empty
+# password, so a missing .env is an actionable error rather than an auth failure later.
+#
+# CAVEAT: POSTGRES_USER/PASSWORD/DB only take effect when the data volume is EMPTY —
+# Postgres reads them once, at first init. Changing them against an existing volume does
+# nothing to the database and will fail to authenticate. To actually apply a change:
+#   docker compose down -v && docker compose up -d     # wipes data, reloads db-seed/
 services:
   postgres:
     image: postgres:16
     container_name: credit-db
     environment:
-      POSTGRES_PASSWORD: xxx
-      POSTGRES_DB: credit_db
+      POSTGRES_USER: ${DB_USER:?set DB_USER in .env - copy .env.example to .env first}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env - copy .env.example to .env first}
+      POSTGRES_DB: ${DB_NAME:?set DB_NAME in .env - copy .env.example to .env first}
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - credit_db_data:/var/lib/postgresql/data
       - ./db-seed:/docker-entrypoint-initdb.d

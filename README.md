@@ -2,10 +2,9 @@
 
 End-to-end credit risk pipeline built over the 17-session plan in
 `docs/Credit_Risk_Pipeline_Plan_v3.md`, with fixes integrated from a direct audit of
-`Credit_Risk_Dataset.xlsx` (32,581 rows, 29 columns). Sessions 1-16 are built: Excel →
+`Credit_Risk_Dataset.xlsx` (32,581 rows, 29 columns). All 17 sessions are built: Excel →
 PostgreSQL (4 tables) → SQL feature views → XGBoost (2 models) → a two-tab Streamlit app
-(approve/reject with SHAP reasons, and a portfolio dashboard). Session 17 (README
-narrative + demo capture) is the remaining one.
+(approve/reject with SHAP reasons, and a portfolio dashboard).
 
 ## Pipeline shape
 
@@ -293,14 +292,28 @@ regenerate it, but nothing can regenerate the `.xlsx`.
 Fastest path — restore the committed snapshot instead of re-running the ETL:
 
 ```bash
-cp .env.example .env               # set a real password
+cp .env.example .env               # set a real password — docker-compose.yml reads this
+                                    # same file, so the app and the container can't drift
 uv sync                            # installs from pyproject.toml + uv.lock — the only
                                     # dependency source in this repo, no requirements.txt
 docker compose up -d               # db-seed/01_seed.sql auto-loads on first init — includes
                                     # schema, data, and the ml_features/dashboard_aggregates views
-uv run jupyter notebook notebooks/01_eda.ipynb
+uv run jupyter nbconvert --to notebook --execute --inplace \
+    notebooks/05_explainability_and_bundles.ipynb   # REQUIRED: models/*.pkl is gitignored,
+                                    # so a fresh clone has no bundles and app.py won't start
 uv run streamlit run app/app.py
 ```
+
+Two things that bite on a fresh clone:
+
+- **`models/*.pkl` does not come with the repo.** It is gitignored (see
+  [Why both the Excel file and the SQL seed are committed](#why-both-the-excel-file-and-the-sql-seed-are-committed)
+  for what *is* committed and why). Skip the notebook-05 step and `app.py` fails at
+  import, before rendering anything.
+- **Postgres only reads `POSTGRES_USER`/`PASSWORD`/`DB` when the data volume is empty.**
+  Changing `.env` against an already-initialised volume does nothing to the database and
+  then fails to authenticate. To actually apply a credentials change:
+  `docker compose down -v && docker compose up -d` (wipes the volume, reloads `db-seed/`).
 
 To rebuild that snapshot from the raw dataset instead:
 

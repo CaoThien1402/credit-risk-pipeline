@@ -484,7 +484,7 @@ catches. Findings, all fixed in the same pass:
 
 - **Tab 2 built**: 4 KPIs (32,581 loans / $312.4M disbursed / 21.8% default rate / 129
   daily-stream rows) and 4 Plotly charts — monthly disbursement, default rate by grade,
-  default rate by country, scatter_geo by city (6 cities). Verified in a real browser:
+  default rate by country, scatter_geo by city (18 cities). Verified in a real browser:
   4 `.js-plotly-plot` nodes, zero console errors.
 - **The overall default rate is weighted by grade volume**, not the mean of the 7
   per-grade rates — grade G has 64 loans and grade A has 10,777, so an unweighted mean
@@ -495,7 +495,7 @@ catches. Findings, all fixed in the same pass:
   `strftime("%-d")` is Linux-only and raises on Windows — build day numbers from
   `.day` instead.
 - **Autoscaling was manufacturing a risk gap.** First version of the geo map spread a
-  20.5%–24.0% city range across the full red-green ramp, so cities looked
+  20.43%–24.19% city range across the full red-green ramp, so cities looked
   catastrophically different while the country chart right above it said geography
   doesn't separate risk (0.13pp spread). Fixed `range_color=[0, 0.5]`; country chart
   pins `yaxis_range=[0, 0.3]` and one flat colour instead of three loud hues for three
@@ -579,6 +579,61 @@ catches. Findings, all fixed in the same pass:
   headless.
 - Total README: 320 lines. Images ~1.5 MB across 4 PNGs.
 
+### Session 18 (2026-09-21) — post-close fixes, and the income-tail question closed
+
+- **`tests/test_model_bundles.py` reported FAILURES, not skips, with Docker down.**
+  `test_bundle_predicts_through_preprocessor_then_model` called `get_engine()` itself
+  instead of taking the fixture that owns the `pytest.skip`, so a missing Postgres
+  surfaced as 2 red tests — contradicting the module docstring's own claim ("Skips if
+  ... a reachable Postgres is missing"). Fixed by extracting a `db_engine` fixture that
+  both tests depend on; `historical_row_count` now derives from it. Verified **both**
+  directions: with the DB up, 4 passed; with `DB_PORT=59999`, 9 skipped / **0 failed**
+  across this file plus `test_views.py`.
+- **`docker-compose.yml` hardcoded the credentials** rather than reading `.env`, so
+  following the README's own "set a real password" instruction broke the connection —
+  the app read the new password while the container kept the literal `xxx`. Now
+  `${DB_USER}` / `${DB_PASSWORD}` / `${DB_NAME}` / `${DB_PORT}` with the `:?` form, so a
+  missing `.env` fails with an actionable message instead of an empty substitution
+  (verified: `docker compose config` in a directory with no `.env` names all three vars).
+  Caveat documented in-file and in the README: Postgres only honours these on an **empty
+  volume**, so applying a change needs `docker compose down -v`.
+- **README's "Running from scratch" never regenerated `models/*.pkl`** yet ended with
+  `streamlit run app/app.py` — on a fresh clone that command fails at import, since the
+  bundles are gitignored. Added the notebook-05 step plus a short "two things that bite
+  on a fresh clone" note. Also fixed the stale opening line still claiming session 17 was
+  outstanding (it merged in `f0c91c8`).
+- **The dashboard map plots 18 cities, not 6.** The session 15-16 entry above said 6;
+  re-queried against the live DB, `GEO_QUERY` returns all 18 `(country, state, city)`
+  combos, each with ~1,750-1,850 loans. Everything else in that entry re-verified and
+  correct: 32,581 loans, $312.4M disbursed, 21.82% weighted default rate, 129
+  synthetic_daily rows. City default-rate spread is **20.43%-24.19% (3.76pp)**, not the
+  "20.5%-24.0% / 3.5pp" quoted in CLAUDE.md and the `app.py` comment — both corrected.
+  Country spread re-confirmed at 0.13pp (Canada 21.86 / UK 21.73 / USA 21.86).
+- **Closed: the `income` / `other_debt` right-tail question** (was the only item under
+  "Open questions" since buổi 8). Verdict: **genuine values, leave uncapped.** Three
+  independent checks, all against the live DB:
+  1. *An independent column corroborates them.* For the 9 rows with `income > 1M`, the
+     largest disagreement between `loan_amnt / income` and the separately-stored
+     `loan_percent_income` is **0.0048** — tighter than the **0.0934** worst case across
+     all 32,581 rows. A mistyped income (an extra zero, say) would put those two columns
+     wildly out of step; instead the tail is *more* internally consistent than the body.
+  2. *The one extreme `other_debt` row is the same person as the extreme income.*
+     `CUST_32298` has `other_debt` 1,187,998.91 against `income` 6,000,000, and its
+     stored `debt_to_income_ratio` is 0.1988 — which is 1,187,998.91 / 6,000,000. Three
+     columns agree with each other.
+  3. *Behaviour points the economically expected way.* Top-1% income rows (n=326) default
+     at **12.27%** vs **21.91%** for everyone else. A data-entry error would produce no
+     such gradient.
+  Contrast with the `person_age = 144` rows, which are capped precisely because nothing
+  else in the row corroborates them. Distribution for reference: `income` p50 55,000 /
+  p99 225,200 / p99.9 648,000 / max 6,000,000; `other_debt` p50 8,995 / p99 46,355 /
+  max 1,187,999 (exactly 1 row above 500k).
+
 ## Open questions — not yet resolved
 
-- `income` (max ~6,000,000) and `other_debt` (max ~1,190,000) have heavy right tails. Not yet determined whether these are genuine high earners or data errors — currently left uncapped. If model calibration looks off in the tails during buổi 9-11, revisit this before assuming the model is at fault.
+- *(none currently)* — the `income`/`other_debt` tail question that sat here since buổi 8
+  was closed on 2026-09-21; see the session 18 entry above. Two known-but-accepted
+  wrinkles are recorded rather than open: notebook 04 derives `scale_pos_weight` from the
+  train split but cross-validates over the full set (REVIEW.md "Cần cải thiện #2"), and
+  `loan_grade` is still one-hot encoded despite being genuinely ordinal
+  (`model/features.py::ORDINAL_CATEGORICAL_COLS`).
