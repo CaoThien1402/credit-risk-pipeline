@@ -474,7 +474,7 @@ with tab_dashboard:
     st.subheader("Portfolio by city")
 
     # range_color is fixed to 0-50% rather than left to autoscale. Autoscaling maps the
-    # observed 20.5%-24.0% city spread across the full red-to-green ramp, so a 3.5pp
+    # observed 20.4%-24.2% city spread across the full red-to-green ramp, so a 3.8pp
     # difference is drawn as if some cities were catastrophic and others pristine -
     # the same exaggeration the country chart's fixed y-axis avoids, and it would
     # contradict that chart sitting right above it. On a fixed scale the cities are
